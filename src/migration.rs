@@ -140,11 +140,9 @@ impl SweepAlgorithm<LocalOutput, UnsignedPsbt> for ConsolidationSweep {
             .map(|u| u.txout.value)
             .fold(Amount::ZERO, |a, b| a + b);
         let fee = estimate_fee(utxos.len(), 1, fee_rate);
-        let net = total_value
-            .checked_sub(fee)
-            .ok_or_else(|| MigrationError::SweepFailed(format!(
-                "fee {fee} exceeds total UTXO value {total_value}"
-            )))?;
+        let net = total_value.checked_sub(fee).ok_or_else(|| {
+            MigrationError::SweepFailed(format!("fee {fee} exceeds total UTXO value {total_value}"))
+        })?;
         Ok(MigrationPlan {
             sweep_transactions: vec![SweepTransaction {
                 source_utxos: utxos.iter().map(|u| u.outpoint).collect(),
@@ -212,11 +210,9 @@ impl SweepAlgorithm<LocalOutput, UnsignedPsbt> for AddressForAddressSweep {
                 .fold(Amount::ZERO, |a, b| a + b);
             let fee = estimate_fee(group.len(), 1, fee_rate);
             total_fees += fee;
-            let net = value
-                .checked_sub(fee)
-                .ok_or_else(|| MigrationError::SweepFailed(format!(
-                    "fee {fee} exceeds group value {value}"
-                )))?;
+            let net = value.checked_sub(fee).ok_or_else(|| {
+                MigrationError::SweepFailed(format!("fee {fee} exceeds group value {value}"))
+            })?;
             sweep_transactions.push(SweepTransaction {
                 source_utxos: group.iter().map(|u| u.outpoint).collect(),
                 destinations: vec![(destination.clone(), net)],

@@ -198,10 +198,7 @@ impl<S: Signer + Clone> Federation<S> {
     }
 
     /// Change the signing threshold without modifying the signer set.
-    pub fn change_threshold(
-        &self,
-        new_threshold: u32,
-    ) -> Result<Federation<S>, FederationError> {
+    pub fn change_threshold(&self, new_threshold: u32) -> Result<Federation<S>, FederationError> {
         let signers: Vec<S> = self.signers.iter().cloned().collect();
         Federation::with_key_mode(new_threshold, signers, self.network, self.key_mode)
     }
@@ -331,7 +328,10 @@ mod tests {
         let err = Federation::new(4, dyn_signers(&[1, 2, 3]), Network::Testnet.into()).unwrap_err();
         assert!(matches!(
             err,
-            FederationError::ThresholdExceedsSignerCount { threshold: 4, signers: 3 }
+            FederationError::ThresholdExceedsSignerCount {
+                threshold: 4,
+                signers: 3
+            }
         ));
     }
 
@@ -346,10 +346,7 @@ mod tests {
         let s_test = Box::new(MockSigner::with_seed(1, Network::Testnet)) as Box<dyn Signer>;
         let s_main = Box::new(MockSigner::with_seed(2, Network::Bitcoin)) as Box<dyn Signer>;
         let err = Federation::new(2, vec![s_test, s_main], Network::Testnet.into()).unwrap_err();
-        assert!(matches!(
-            err,
-            FederationError::SignerNetworkMismatch { .. }
-        ));
+        assert!(matches!(err, FederationError::SignerNetworkMismatch { .. }));
     }
 
     #[test]
@@ -403,7 +400,8 @@ mod tests {
         // n becomes 1, n < 2 → InsufficientSigners; or m=2 > n=1.
         assert!(matches!(
             err,
-            FederationError::InsufficientSigners(_) | FederationError::ThresholdExceedsSignerCount { .. }
+            FederationError::InsufficientSigners(_)
+                | FederationError::ThresholdExceedsSignerCount { .. }
         ));
     }
 

@@ -15,8 +15,8 @@ use bitcoin::Network;
 use proptest::prelude::*;
 
 mod harness {
-    use asterism_core::test_utils::MockSigner;
     use asterism_core::Signer;
+    use asterism_core::test_utils::MockSigner;
     use bitcoin::Network;
 
     pub fn make_signers(seeds: &[u64]) -> Vec<Box<dyn Signer>> {
@@ -127,7 +127,9 @@ fn recovery_json_round_trip_preserves_checksum() {
     let t = RecoveryTemplate::from_federation(&fed);
     let json = t.to_json().unwrap();
     let parsed = RecoveryTemplate::from_json(&json).unwrap();
-    parsed.verify().expect("checksum must verify after round-trip");
+    parsed
+        .verify()
+        .expect("checksum must verify after round-trip");
     assert_eq!(t.checksum, parsed.checksum);
 }
 

@@ -7,9 +7,9 @@
 
 use std::time::SystemTime;
 
+use bitcoin::Network;
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpriv, Xpub};
 use bitcoin::secp256k1::Secp256k1;
-use bitcoin::Network;
 
 use crate::error::SignerError;
 use crate::network::NetworkType;
@@ -52,7 +52,9 @@ impl MockSigner {
 
     /// Generate a `MockSigner` with a label.
     pub fn generate(label: &str, network: Network) -> Self {
-        let seed = label.bytes().fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
+        let seed = label
+            .bytes()
+            .fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
         let mut s = Self::with_seed(seed, network);
         s.label = label.into();
         s

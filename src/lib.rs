@@ -100,9 +100,7 @@ pub use migration::{
     SweepAlgorithm, SweepTransaction,
 };
 pub use network::NetworkType;
-pub use psbt::{
-    FinalizedPsbt, SigningAction, SigningCoordinator, SigningRequest, UnsignedPsbt,
-};
+pub use psbt::{FinalizedPsbt, SigningAction, SigningCoordinator, SigningRequest, UnsignedPsbt};
 pub use recovery::{RecoveryInstructions, RecoverySoftware, RecoveryTemplate};
 pub use signer::{
     DeviceType, Signer, SignerCapabilities, SignerHealth, SignerId, SignerType, TransportType,

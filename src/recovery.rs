@@ -14,7 +14,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, TimestampSeconds};
+use serde_with::{TimestampSeconds, serde_as};
 use sha2::{Digest, Sha256};
 
 use crate::error::RecoveryError;
@@ -284,7 +284,10 @@ impl RecoveryTemplate {
             out.push_str(&format!(
                 "  - {}{} fingerprint={} path={}\n",
                 s.id,
-                s.label.as_ref().map(|l| format!(" ({l})")).unwrap_or_default(),
+                s.label
+                    .as_ref()
+                    .map(|l| format!(" ({l})"))
+                    .unwrap_or_default(),
                 s.fingerprint,
                 s.derivation_path
             ));
@@ -553,7 +556,12 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            vec!["Bitcoin Core", "Sparrow Wallet", "Specter Desktop", "Nunchuk"]
+            vec![
+                "Bitcoin Core",
+                "Sparrow Wallet",
+                "Specter Desktop",
+                "Nunchuk"
+            ]
         );
     }
 

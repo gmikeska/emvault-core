@@ -145,7 +145,10 @@ impl DescriptorBuilder {
     }
 }
 
-fn build_descriptor_key(mode: KeyMode, entry: &KeyEntry) -> Result<DescriptorPublicKey, DescriptorError> {
+fn build_descriptor_key(
+    mode: KeyMode,
+    entry: &KeyEntry,
+) -> Result<DescriptorPublicKey, DescriptorError> {
     let origin = Some((entry.fingerprint, entry.derivation_path.clone()));
     match mode {
         KeyMode::Fixed => {

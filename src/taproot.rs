@@ -105,13 +105,15 @@ impl<S: Signer + Clone> TaprootFederationBuilder<S> {
         if hsm_signers.is_empty() {
             return Err(FederationError::InvalidTaproot(
                 "at least one HSM signer required (use Federation::new for wallet-only \
-                 federations)".into(),
+                 federations)"
+                    .into(),
             ));
         }
         if wallet_signers.is_empty() {
             return Err(FederationError::InvalidTaproot(
                 "at least one consumer hardware wallet signer required (use Federation::new \
-                 for HSM-only federations)".into(),
+                 for HSM-only federations)"
+                    .into(),
             ));
         }
 
@@ -185,9 +187,8 @@ impl<S: Signer + Clone> TaprootFederationBuilder<S> {
         let descriptor_string =
             format!("tr({NUMS_HEX},{{{hsm_leaf},{{{wallet_leaf},{mixed_leaf}}}}})");
 
-        let descriptor: Descriptor<DescriptorPublicKey> = descriptor_string
-            .parse()
-            .map_err(|e: miniscript::Error| {
+        let descriptor: Descriptor<DescriptorPublicKey> =
+            descriptor_string.parse().map_err(|e: miniscript::Error| {
                 FederationError::InvalidTaproot(format!(
                     "miniscript rejected tr descriptor: {e}\nfull descriptor: {descriptor_string}"
                 ))
@@ -210,7 +211,12 @@ fn format_xonly_key<S: Signer>(s: &S) -> String {
     let origin_fp = s.fingerprint();
     let origin_path = s.derivation_path();
     // Format with origin: `[fp/path]xonly_hex`. miniscript accepts this.
-    format!("[{}{}]{}", origin_fp, origin_path_to_string(origin_path), xonly)
+    format!(
+        "[{}{}]{}",
+        origin_fp,
+        origin_path_to_string(origin_path),
+        xonly
+    )
 }
 
 fn origin_path_to_string(path: &bitcoin::bip32::DerivationPath) -> String {
@@ -313,7 +319,10 @@ mod tests {
         let err = b.build().unwrap_err();
         assert!(matches!(
             err,
-            FederationError::MissingCapability { capability: "taproot", .. }
+            FederationError::MissingCapability {
+                capability: "taproot",
+                ..
+            }
         ));
     }
 
