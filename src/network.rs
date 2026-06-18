@@ -25,26 +25,26 @@ impl NetworkType {
     /// Returns the underlying [`bitcoin::Network`] if this is a Bitcoin network.
     pub fn bitcoin(&self) -> Option<bitcoin::Network> {
         match self {
-            NetworkType::Bitcoin(n) => Some(*n),
+            Self::Bitcoin(n) => Some(*n),
         }
     }
 
     /// Whether this network is a Bitcoin network.
     pub fn is_bitcoin(&self) -> bool {
-        matches!(self, NetworkType::Bitcoin(_))
+        matches!(self, Self::Bitcoin(_))
     }
 }
 
 impl From<bitcoin::Network> for NetworkType {
     fn from(n: bitcoin::Network) -> Self {
-        NetworkType::Bitcoin(n)
+        Self::Bitcoin(n)
     }
 }
 
 impl std::fmt::Display for NetworkType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NetworkType::Bitcoin(n) => write!(f, "bitcoin:{n}"),
+            Self::Bitcoin(n) => write!(f, "bitcoin:{n}"),
         }
     }
 }

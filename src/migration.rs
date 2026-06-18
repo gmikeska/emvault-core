@@ -91,6 +91,12 @@ where
 {
     /// Produce a migration plan for sweeping `utxos` from `old_federation`
     /// to `new_federation` at the given `fee_rate`.
+    ///
+    /// # Errors
+    ///
+    /// Implementations return [`MigrationError`] when the inputs are
+    /// inconsistent (network mismatch, empty UTXO set, missing destination
+    /// mapping, fee exceeds value, etc.).
     fn plan(
         &self,
         utxos: &[U],
@@ -355,9 +361,10 @@ mod tests {
     }
 
     fn dummy_utxo(amount_sat: u64, idx: u32) -> LocalOutput {
+        let byte = u8::try_from(idx & 0xff).expect("idx & 0xff fits u8");
         LocalOutput {
             outpoint: OutPoint {
-                txid: Txid::from_byte_array([idx as u8; 32]),
+                txid: Txid::from_byte_array([byte; 32]),
                 vout: idx,
             },
             txout: bitcoin::TxOut {
@@ -438,11 +445,12 @@ mod tests {
         let mut alt = dummy_utxo(50_000, 1);
         alt.txout.script_pubkey =
             ScriptBuf::from_hex("0014abababababababababababababababababababab").unwrap();
-        utxos.push(alt.clone());
+        let alt_script = alt.txout.script_pubkey.clone();
+        utxos.push(alt);
 
         let mut map = BTreeMap::new();
         map.insert(utxos[0].txout.script_pubkey.clone(), dummy_address());
-        map.insert(alt.txout.script_pubkey.clone(), dummy_address());
+        map.insert(alt_script, dummy_address());
 
         let alg = AddressForAddressSweep::new(map);
         let plan = alg

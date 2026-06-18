@@ -71,6 +71,12 @@
 
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
+#![allow(
+    // chatty on every getter/builder; not a footgun in this codebase
+    clippy::must_use_candidate,
+    // const-fn surface area is still evolving in stable Rust
+    clippy::missing_const_for_fn,
+)]
 
 pub mod descriptor;
 pub mod error;

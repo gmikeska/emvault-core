@@ -50,7 +50,7 @@ proptest! {
     ) {
         let n_us = n as usize;
         let m = (m_offset % n).max(1);
-        let seeds: Vec<u64> = (1..=n as u64).collect();
+        let seeds: Vec<u64> = (1..=u64::from(n)).collect();
         let signers = harness::make_signers(&seeds);
         let fed = Federation::new(m, signers, NetworkType::Bitcoin(Network::Testnet))
             .expect("valid federation");
@@ -71,11 +71,12 @@ proptest! {
     #[test]
     fn order_independence(seed in any::<u64>()) {
         let mut rng_state = seed;
-        let next = |s: &mut u64| { *s = s.wrapping_mul(6364136223846793005).wrapping_add(1); *s };
+        let next = |s: &mut u64| { *s = s.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1); *s };
         let mut perm = vec![1u64, 2, 3, 4, 5];
         // Fisher-Yates with the deterministic LCG above.
         for i in (1..perm.len()).rev() {
-            let j = (next(&mut rng_state) as usize) % (i + 1);
+            let j = usize::try_from(next(&mut rng_state) % (i as u64 + 1))
+                .expect("LCG output bounded by i+1 fits usize");
             perm.swap(i, j);
         }
         let original = harness::make_signers(&[1, 2, 3, 4, 5]);
@@ -91,7 +92,7 @@ proptest! {
         n in 2u32..=8u32,
         excess in 1u32..=4u32,
     ) {
-        let seeds: Vec<u64> = (1..=n as u64).collect();
+        let seeds: Vec<u64> = (1..=u64::from(n)).collect();
         let signers = harness::make_signers(&seeds);
         let m = n + excess;
         let err = Federation::new(m, signers, NetworkType::Bitcoin(Network::Testnet))
@@ -162,7 +163,7 @@ fn rotate_then_rotate_back_returns_same_descriptor() {
     let original = Federation::new(2, signers, NetworkType::Bitcoin(Network::Testnet)).unwrap();
     let replacement = asterism_core::test_utils::MockSigner::with_seed(99, Network::Testnet);
     let replacement_id = replacement.id();
-    let rotated = original.rotate_signer(&id1, replacement).unwrap();
-    let unrotated = rotated.rotate_signer(&replacement_id, s1).unwrap();
+    let rotated = original.rotate_signer(&id1, &replacement).unwrap();
+    let unrotated = rotated.rotate_signer(&replacement_id, &s1).unwrap();
     assert_eq!(original.descriptor_string(), unrotated.descriptor_string());
 }

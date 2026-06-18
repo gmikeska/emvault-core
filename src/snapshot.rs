@@ -57,6 +57,11 @@ pub struct FederationSnapshot {
 
 impl FederationSnapshot {
     /// Construct a snapshot from a [`Federation`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the federation contains more than [`u32::MAX`] signers,
+    /// which the [`Federation`] constructors already preclude.
     pub fn from_federation<S: Signer>(federation: &Federation<S>) -> Self {
         let signers: Vec<SignerSnapshot> = federation
             .signers()
@@ -74,7 +79,8 @@ impl FederationSnapshot {
         Self {
             descriptor: federation.descriptor_string().to_string(),
             threshold: federation.threshold(),
-            total_signers: federation.total_signers() as u32,
+            total_signers: u32::try_from(federation.total_signers())
+                .expect("federation member count fits u32"),
             network: federation.network(),
             signers,
             created_at: now_truncated_to_seconds(),
@@ -88,11 +94,20 @@ impl FederationSnapshot {
     }
 
     /// Pretty JSON for human inspection (NOT canonical).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError::Json`] if `serde_json` rejects the snapshot.
     pub fn to_pretty_json(&self) -> Result<String, SnapshotError> {
         serde_json::to_string_pretty(self).map_err(|e| SnapshotError::Json(e.to_string()))
     }
 
     /// Deserialize from JSON (any formatting).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError::Json`] if `json` is malformed or fails to
+    /// parse into a [`FederationSnapshot`].
     pub fn from_json(json: &str) -> Result<Self, SnapshotError> {
         serde_json::from_str(json).map_err(|e| SnapshotError::Json(e.to_string()))
     }
@@ -103,6 +118,18 @@ impl FederationSnapshot {
     /// - Signer count matches `signers.len()`.
     /// - Descriptor parses successfully.
     /// - Each signer's xpub appears in the descriptor (string-level check).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError::InvalidThreshold`] for threshold/count
+    /// violations, [`SnapshotError::Parse`] if the descriptor doesn't parse,
+    /// or [`SnapshotError::DescriptorMismatch`] if any signer's fingerprint
+    /// is absent from the descriptor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the snapshot contains more than [`u32::MAX`] signers,
+    /// which the [`Federation`] constructors already preclude.
     pub fn verify(&self) -> Result<(), SnapshotError> {
         if self.threshold == 0 || self.threshold > self.total_signers {
             return Err(SnapshotError::InvalidThreshold(format!(
@@ -110,7 +137,9 @@ impl FederationSnapshot {
                 self.threshold, self.total_signers
             )));
         }
-        if self.signers.len() as u32 != self.total_signers {
+        let signer_len = u32::try_from(self.signers.len())
+            .expect("federation member count fits u32");
+        if signer_len != self.total_signers {
             return Err(SnapshotError::InvalidThreshold(format!(
                 "declared total_signers={} but signer set has length {}",
                 self.total_signers,

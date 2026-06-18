@@ -11,6 +11,8 @@
 //! - Programmatically-generated, per-software import instructions.
 //! - A SHA-256 content checksum for tamper detection.
 
+use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -49,11 +51,11 @@ impl RecoverySoftware {
     /// Display name.
     pub fn name(&self) -> &str {
         match self {
-            RecoverySoftware::BitcoinCore => "Bitcoin Core",
-            RecoverySoftware::SparrowWallet => "Sparrow Wallet",
-            RecoverySoftware::SpecterDesktop => "Specter Desktop",
-            RecoverySoftware::Nunchuk => "Nunchuk",
-            RecoverySoftware::Other { name } => name,
+            Self::BitcoinCore => "Bitcoin Core",
+            Self::SparrowWallet => "Sparrow Wallet",
+            Self::SpecterDesktop => "Specter Desktop",
+            Self::Nunchuk => "Nunchuk",
+            Self::Other { name } => name,
         }
     }
 }
@@ -124,8 +126,8 @@ pub struct RecoveryTemplateBuilder<'a, S: Signer = Box<dyn Signer>> {
     softwares: Vec<RecoverySoftware>,
     last_receive_index: Option<u32>,
     last_change_index: Option<u32>,
-    labels: std::collections::HashMap<SignerId, String>,
-    device_types: std::collections::HashMap<SignerId, DeviceType>,
+    labels: HashMap<SignerId, String>,
+    device_types: HashMap<SignerId, DeviceType>,
 }
 
 impl<'a, S: Signer> RecoveryTemplateBuilder<'a, S> {
@@ -142,30 +144,34 @@ impl<'a, S: Signer> RecoveryTemplateBuilder<'a, S> {
             ],
             last_receive_index: None,
             last_change_index: None,
-            labels: Default::default(),
-            device_types: Default::default(),
+            labels: HashMap::default(),
+            device_types: HashMap::default(),
         }
     }
 
     /// Replace the target softwares list.
+    #[must_use]
     pub fn softwares(mut self, sw: Vec<RecoverySoftware>) -> Self {
         self.softwares = sw;
         self
     }
 
     /// Set the last-used external (receive) index.
+    #[must_use]
     pub fn last_receive_index(mut self, idx: u32) -> Self {
         self.last_receive_index = Some(idx);
         self
     }
 
     /// Set the last-used internal (change) index.
+    #[must_use]
     pub fn last_change_index(mut self, idx: u32) -> Self {
         self.last_change_index = Some(idx);
         self
     }
 
     /// Override a signer's label.
+    #[must_use]
     pub fn signer_label(mut self, id: SignerId, label: String) -> Self {
         self.labels.insert(id, label);
         self
@@ -173,12 +179,18 @@ impl<'a, S: Signer> RecoveryTemplateBuilder<'a, S> {
 
     /// Override a signer's device type (e.g. for HSM federations where
     /// `Pkcs11Signer` reports `DeviceType::Hsm` already).
+    #[must_use]
     pub fn signer_device_type(mut self, id: SignerId, dt: DeviceType) -> Self {
         self.device_types.insert(id, dt);
         self
     }
 
     /// Build the template.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the federation contains more than [`u32::MAX`] signers,
+    /// which the [`Federation`] constructors already preclude.
     pub fn build(self) -> RecoveryTemplate {
         let descriptor = self.federation.descriptor_string().to_string();
         let signer_info: Vec<RecoverySignerInfo> = self
@@ -206,7 +218,8 @@ impl<'a, S: Signer> RecoveryTemplateBuilder<'a, S> {
         let mut t = RecoveryTemplate {
             descriptor,
             threshold: self.federation.threshold(),
-            total_signers: self.federation.total_signers() as u32,
+            total_signers: u32::try_from(self.federation.total_signers())
+                .expect("federation member count fits u32"),
             network: self.federation.network(),
             signer_info,
             reconstruction_instructions: Vec::new(),
@@ -236,17 +249,32 @@ impl RecoveryTemplate {
     }
 
     /// Serialize to (canonical) JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecoveryError::Json`] if `serde_json` rejects the template.
     pub fn to_json(&self) -> Result<String, RecoveryError> {
         serde_json::to_string_pretty(self).map_err(|e| RecoveryError::Json(e.to_string()))
     }
 
     /// Deserialize from JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecoveryError::Json`] if `json` is malformed or fails to
+    /// parse into a [`RecoveryTemplate`].
     pub fn from_json(json: &str) -> Result<Self, RecoveryError> {
         serde_json::from_str(json).map_err(|e| RecoveryError::Json(e.to_string()))
     }
 
     /// Verify internal consistency: the checksum must match the canonical
     /// content of the template.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecoveryError::ChecksumMismatch`] if the recomputed checksum
+    /// disagrees with [`RecoveryTemplate::checksum`], or
+    /// [`RecoveryError::InvalidDescriptor`] if the descriptor doesn't parse.
     pub fn verify(&self) -> Result<(), RecoveryError> {
         let recomputed = compute_checksum(self);
         if recomputed != self.checksum {
@@ -255,7 +283,6 @@ impl RecoveryTemplate {
                 actual: recomputed,
             });
         }
-        // Check that the descriptor parses.
         let secp = bitcoin::secp256k1::Secp256k1::new();
         miniscript::Descriptor::<miniscript::DescriptorPublicKey>::parse_descriptor(
             &secp,
@@ -270,43 +297,42 @@ impl RecoveryTemplate {
         let mut out = String::new();
         out.push_str("Asterism Federation Recovery Template\n");
         out.push_str("======================================\n");
-        out.push_str(&format!(
-            "Threshold: {} of {}\n",
+        let _ = writeln!(
+            out,
+            "Threshold: {} of {}",
             self.threshold, self.total_signers
-        ));
-        out.push_str(&format!("Network:   {}\n", self.network));
-        out.push_str(&format!("Generated: {:?}\n", self.generated_at));
-        out.push_str(&format!("Checksum:  {}\n\n", self.checksum));
+        );
+        let _ = writeln!(out, "Network:   {}", self.network);
+        let _ = writeln!(out, "Generated: {:?}", self.generated_at);
+        let _ = writeln!(out, "Checksum:  {}\n", self.checksum);
         out.push_str("Descriptor:\n");
         out.push_str(&self.descriptor);
         out.push_str("\n\nSigners:\n");
         for s in &self.signer_info {
-            out.push_str(&format!(
-                "  - {}{} fingerprint={} path={}\n",
-                s.id,
-                s.label
-                    .as_ref()
-                    .map(|l| format!(" ({l})"))
-                    .unwrap_or_default(),
-                s.fingerprint,
-                s.derivation_path
-            ));
+            let label = s
+                .label
+                .as_ref()
+                .map(|l| format!(" ({l})"))
+                .unwrap_or_default();
+            let _ = writeln!(
+                out,
+                "  - {}{} fingerprint={} path={}",
+                s.id, label, s.fingerprint, s.derivation_path
+            );
         }
         if let (Some(r), Some(c)) = (self.last_receive_index, self.last_change_index) {
-            out.push_str(&format!("\nLast indexes: receive={r}, change={c}\n"));
+            let _ = writeln!(out, "\nLast indexes: receive={r}, change={c}");
         }
         out.push_str("\nReconstruction instructions:\n");
         for inst in &self.reconstruction_instructions {
-            out.push_str(&format!(
-                "\n--- {}{} ---\n",
-                inst.software.name(),
-                inst.min_version
-                    .as_ref()
-                    .map(|v| format!(" (>= {v})"))
-                    .unwrap_or_default()
-            ));
+            let version = inst
+                .min_version
+                .as_ref()
+                .map(|v| format!(" (>= {v})"))
+                .unwrap_or_default();
+            let _ = writeln!(out, "\n--- {}{} ---", inst.software.name(), version);
             for (i, step) in inst.steps.iter().enumerate() {
-                out.push_str(&format!("{}. {step}\n", i + 1));
+                let _ = writeln!(out, "{}. {step}", i + 1);
             }
         }
         out

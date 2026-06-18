@@ -44,6 +44,11 @@ use crate::signer::{Signer, SignerId};
 pub const NUMS_HEX: &str = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
 
 /// Returns the BIP-341 NUMS X-only public key.
+///
+/// # Panics
+///
+/// Panics if the hard-coded [`NUMS_HEX`] constant fails to parse — this is a
+/// compile-time invariant violation and indicates a corrupted source tree.
 pub fn nums_point() -> XOnlyPublicKey {
     XOnlyPublicKey::from_str(NUMS_HEX).expect("BIP-341 NUMS point is well-formed")
 }
@@ -93,8 +98,22 @@ impl<S: Signer> TaprootFederationBuilder<S> {
 impl<S: Signer + Clone> TaprootFederationBuilder<S> {
     /// Construct the federation. Returns a [`Federation`] whose
     /// [`Federation::descriptor`] is a `tr(NUMS, { ... })` MAST descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FederationError::InvalidTaproot`] if either signer group is
+    /// empty or the mixed threshold is out of range, [`FederationError::DuplicateSigner`]
+    /// if the same [`SignerId`] appears across groups, [`FederationError::SignerNetworkMismatch`]
+    /// if a signer doesn't support the federation's network, or
+    /// [`FederationError::MissingCapability`] if a signer can't sign Taproot.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the total number of signers exceeds [`u32::MAX`] — practically
+    /// impossible since `Vec::len` returns `usize` and federations have at
+    /// most a few hundred signers.
     pub fn build(self) -> Result<Federation<S>, FederationError> {
-        let TaprootFederationBuilder {
+        let Self {
             network,
             hsm_signers,
             wallet_signers,
@@ -146,8 +165,9 @@ impl<S: Signer + Clone> TaprootFederationBuilder<S> {
             }
         }
 
-        let total = (hsm_signers.len() + wallet_signers.len()) as u32;
-        let mixed_k = mixed_threshold.unwrap_or((total + 1) / 2);
+        let total = u32::try_from(hsm_signers.len() + wallet_signers.len())
+            .expect("federation member count fits u32");
+        let mixed_k = mixed_threshold.unwrap_or_else(|| total.div_ceil(2));
         if mixed_k < 2 {
             return Err(FederationError::InvalidTaproot(
                 "mixed threshold must be at least 2".into(),
@@ -174,8 +194,8 @@ impl<S: Signer + Clone> TaprootFederationBuilder<S> {
             w = wallet_signers.len(),
             keys = wallet_keys.join(",")
         );
-        let mut all_keys = hsm_keys.clone();
-        all_keys.extend(wallet_keys.clone());
+        let mut all_keys = hsm_keys;
+        all_keys.extend(wallet_keys);
         let mixed_leaf = format!(
             "multi_a({k},{keys})",
             k = mixed_k,
@@ -197,10 +217,7 @@ impl<S: Signer + Clone> TaprootFederationBuilder<S> {
         // ----- assemble Federation via internal API -----------------------
         // The descriptor is already built — we use the `from_taproot_parts`
         // private constructor to bypass DescriptorBuilder.
-        let signers: Vec<S> = hsm_signers
-            .into_iter()
-            .chain(wallet_signers.into_iter())
-            .collect();
+        let signers: Vec<S> = hsm_signers.into_iter().chain(wallet_signers).collect();
         Federation::from_descriptor(mixed_k, signers, network, descriptor)
     }
 }
@@ -243,14 +260,18 @@ impl<S: Signer> Federation<S> {
     ///
     /// This is the bypass path used by [`TaprootFederationBuilder`]; ordinary
     /// callers should use [`Federation::new`].
+    ///
+    /// # Errors
+    ///
+    /// Forwards any [`FederationError`] from the internal validation done by
+    /// [`crate::federation::FederationCtor::from_parts`].
     #[doc(hidden)]
     pub fn from_descriptor(
         threshold: u32,
         signers: Vec<S>,
         network: NetworkType,
         descriptor: Descriptor<DescriptorPublicKey>,
-    ) -> Result<Federation<S>, FederationError> {
-        // Deferred import to avoid a circular module reference.
+    ) -> Result<Self, FederationError> {
         use crate::federation::FederationCtor;
         FederationCtor::from_parts(threshold, signers, network, descriptor)
     }

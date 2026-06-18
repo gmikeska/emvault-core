@@ -27,23 +27,19 @@ use crate::network::NetworkType;
 use crate::signer::{Signer, SignerId};
 
 /// How descriptor keys are encoded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Defaults to [`KeyMode::Fixed`], the only mode that works uniformly across
+/// HSM (PKCS#11) and HD signers — `Pkcs11Signer` in the `FixedKey` strategy
+/// stores a single key per signer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum KeyMode {
     /// Each signer contributes a single public key. The descriptor produces
     /// one address.
+    #[default]
     Fixed,
     /// Each signer contributes an xpub, and the descriptor uses BIP-389
     /// multipath wildcards (`/<0;1>/*`) for receive/change derivation.
     Ranged,
-}
-
-impl Default for KeyMode {
-    fn default() -> Self {
-        // Default to Fixed because it is the only mode that works uniformly
-        // across HSM (PKCS#11) and HD signers — Pkcs11Signer in the FixedKey
-        // strategy stores a single key per signer.
-        KeyMode::Fixed
-    }
 }
 
 /// Builder for the canonical `wsh(sortedmulti(m, ...))` federation descriptor.
@@ -79,6 +75,7 @@ impl DescriptorBuilder {
     }
 
     /// Override the [`KeyMode`].
+    #[must_use]
     pub fn key_mode(mut self, mode: KeyMode) -> Self {
         self.mode = mode;
         self
@@ -86,6 +83,11 @@ impl DescriptorBuilder {
 
     /// Add a signer's contribution. Returns an error if a signer with the
     /// same id is already registered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DescriptorError::DuplicateKey`] if a signer with the same
+    /// [`SignerId`] has already been added.
     pub fn add_signer(&mut self, signer: &dyn Signer) -> Result<&mut Self, DescriptorError> {
         let id = signer.id();
         let entry = KeyEntry {
@@ -100,30 +102,37 @@ impl DescriptorBuilder {
     }
 
     /// Build the canonical descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DescriptorError::Parse`] if no signers have been added or
+    /// the configured network is unsupported, [`DescriptorError::NetworkMismatch`]
+    /// if any signer's xpub is on a different network,
+    /// [`DescriptorError::DuplicateKey`] if two formatted keys collide, or
+    /// [`DescriptorError::Miniscript`] if miniscript rejects the assembled
+    /// descriptor.
     pub fn build(self) -> Result<Descriptor<DescriptorPublicKey>, DescriptorError> {
         if self.entries.is_empty() {
             return Err(DescriptorError::Parse(
                 "descriptor builder has no signers".into(),
             ));
         }
-        // Verify network compatibility.
         let bitcoin_net = self
             .network
             .bitcoin()
             .ok_or_else(|| DescriptorError::Parse("only Bitcoin networks supported".into()))?;
         for entry in self.entries.values() {
-            // Xpub::network is `bitcoin::NetworkKind`. We treat any non-Mainnet
-            // network as testnet-equivalent for the purposes of this check.
+            // Xpub::network is `bitcoin::NetworkKind`; any non-Mainnet
+            // network is treated as testnet-equivalent for this check.
             let xpub_kind = entry.xpub.network;
             let expected_kind = bitcoin::NetworkKind::from(bitcoin_net);
             if xpub_kind != expected_kind {
                 return Err(DescriptorError::NetworkMismatch {
-                    expected: format!("{:?}", expected_kind),
-                    actual: format!("{:?}", xpub_kind),
+                    expected: format!("{expected_kind:?}"),
+                    actual: format!("{xpub_kind:?}"),
                 });
             }
         }
-        // Build descriptor keys in deterministic order.
         let keys: Vec<DescriptorPublicKey> = self
             .entries
             .values()

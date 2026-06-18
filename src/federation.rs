@@ -40,7 +40,8 @@ impl<S: Signer> std::fmt::Debug for Federation<S> {
             .field("network", &self.network)
             .field("key_mode", &self.key_mode)
             .field("descriptor", &self.descriptor_string)
-            .finish()
+            .field("created_at", &self.created_at)
+            .finish_non_exhaustive()
     }
 }
 
@@ -67,6 +68,11 @@ impl<S: Signer> Federation<S> {
     /// Like [`Federation::new`] but with an explicit [`KeyMode`]. Use
     /// [`KeyMode::Ranged`] when all signers are HD-capable consumer hardware
     /// wallets and you want gap-limit-style address derivation.
+    ///
+    /// # Errors
+    ///
+    /// Same conditions as [`Federation::new`], plus [`FederationError::Descriptor`]
+    /// if the underlying [`DescriptorBuilder`] rejects the inputs.
     pub fn with_key_mode(
         threshold: u32,
         signers: Vec<S>,
@@ -151,7 +157,13 @@ impl<S: Signer> Federation<S> {
 
 impl<S: Signer + Clone> Federation<S> {
     /// Replace `old` with `new`. Returns a new federation with `n` unchanged.
-    pub fn rotate_signer(&self, old: &SignerId, new: S) -> Result<Federation<S>, FederationError> {
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::SignerNotFound`] if `old` is not a member,
+    /// [`FederationError::DuplicateSigner`] if `new` is already a member,
+    /// or any error returned by [`Self::with_key_mode`].
+    pub fn rotate_signer(&self, old: &SignerId, new: &S) -> Result<Self, FederationError> {
         if !self.contains(old) {
             return Err(FederationError::SignerNotFound(old.clone()));
         }
@@ -169,22 +181,34 @@ impl<S: Signer + Clone> Federation<S> {
                 }
             })
             .collect();
-        Federation::with_key_mode(self.threshold, signers, self.network, self.key_mode)
+        Self::with_key_mode(self.threshold, signers, self.network, self.key_mode)
     }
 
     /// Add `new` to the federation. `n` increases by 1; threshold unchanged.
-    pub fn add_signer(&self, new: S) -> Result<Federation<S>, FederationError> {
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::DuplicateSigner`] if `new` is already a member, or
+    /// any error returned by [`Self::with_key_mode`].
+    pub fn add_signer(&self, new: S) -> Result<Self, FederationError> {
         if self.contains(&new.id()) {
             return Err(FederationError::DuplicateSigner(new.id()));
         }
-        let mut signers: Vec<S> = self.signers.iter().cloned().collect();
+        let mut signers: Vec<S> = self.signers.clone();
         signers.push(new);
-        Federation::with_key_mode(self.threshold, signers, self.network, self.key_mode)
+        Self::with_key_mode(self.threshold, signers, self.network, self.key_mode)
     }
 
     /// Remove the signer with `id`. `n` decreases by 1; threshold unchanged
     /// (must still satisfy `m <= n`).
-    pub fn remove_signer(&self, id: &SignerId) -> Result<Federation<S>, FederationError> {
+    ///
+    /// # Errors
+    ///
+    /// [`FederationError::SignerNotFound`] if `id` is not a member, or any
+    /// error returned by [`Self::with_key_mode`] (notably
+    /// [`FederationError::InsufficientSigners`] if removal would shrink `n`
+    /// below 2).
+    pub fn remove_signer(&self, id: &SignerId) -> Result<Self, FederationError> {
         if !self.contains(id) {
             return Err(FederationError::SignerNotFound(id.clone()));
         }
@@ -194,13 +218,17 @@ impl<S: Signer + Clone> Federation<S> {
             .filter(|s| &s.id() != id)
             .cloned()
             .collect();
-        Federation::with_key_mode(self.threshold, signers, self.network, self.key_mode)
+        Self::with_key_mode(self.threshold, signers, self.network, self.key_mode)
     }
 
     /// Change the signing threshold without modifying the signer set.
-    pub fn change_threshold(&self, new_threshold: u32) -> Result<Federation<S>, FederationError> {
-        let signers: Vec<S> = self.signers.iter().cloned().collect();
-        Federation::with_key_mode(new_threshold, signers, self.network, self.key_mode)
+    ///
+    /// # Errors
+    ///
+    /// Any error returned by [`Self::with_key_mode`].
+    pub fn change_threshold(&self, new_threshold: u32) -> Result<Self, FederationError> {
+        let signers: Vec<S> = self.signers.clone();
+        Self::with_key_mode(new_threshold, signers, self.network, self.key_mode)
     }
 }
 
@@ -219,6 +247,10 @@ impl FederationCtor {
     /// Build a `Federation` from a pre-constructed descriptor (e.g. one
     /// produced by the Taproot MAST builder). Performs the same input
     /// validation as `Federation::new` but skips descriptor construction.
+    ///
+    /// # Errors
+    ///
+    /// Same conditions as [`Federation::new`].
     pub fn from_parts<S: Signer>(
         threshold: u32,
         signers: Vec<S>,
@@ -253,13 +285,14 @@ fn validate_inputs<S: Signer>(
     if threshold == 0 {
         return Err(FederationError::ZeroThreshold);
     }
+    let signer_count = u32::try_from(signers.len()).expect("federation member count fits u32");
     if signers.len() < 2 {
-        return Err(FederationError::InsufficientSigners(signers.len() as u32));
+        return Err(FederationError::InsufficientSigners(signer_count));
     }
     if (threshold as usize) > signers.len() {
         return Err(FederationError::ThresholdExceedsSignerCount {
             threshold,
-            signers: signers.len() as u32,
+            signers: signer_count,
         });
     }
     let mut seen = HashSet::new();
@@ -411,9 +444,9 @@ mod tests {
         let s2 = MockSigner::with_seed(2, Network::Testnet);
         let s3 = MockSigner::with_seed(3, Network::Testnet);
         let id1 = s1.id();
-        let f = Federation::new(2, vec![s1.clone(), s2, s3], Network::Testnet.into()).unwrap();
+        let f = Federation::new(2, vec![s1, s2, s3], Network::Testnet.into()).unwrap();
         let new = MockSigner::with_seed(99, Network::Testnet);
-        let rotated = f.rotate_signer(&id1, new.clone()).unwrap();
+        let rotated = f.rotate_signer(&id1, &new).unwrap();
         assert_eq!(rotated.total_signers(), 3);
         assert!(!rotated.contains(&id1));
         assert!(rotated.contains(&new.id()));

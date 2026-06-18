@@ -54,7 +54,7 @@ impl MockSigner {
     pub fn generate(label: &str, network: Network) -> Self {
         let seed = label
             .bytes()
-            .fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
+            .fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(u64::from(b)));
         let mut s = Self::with_seed(seed, network);
         s.label = label.into();
         s

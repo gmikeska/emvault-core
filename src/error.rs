@@ -73,7 +73,7 @@ pub enum FederationError {
     MissingCapability {
         /// The offending signer.
         id: SignerId,
-        /// The missing capability (e.g. "taproot", "blind_signing").
+        /// The missing capability (e.g. `"taproot"`, `"blind_signing"`).
         capability: &'static str,
     },
     /// Taproot federation builder rejected the input.

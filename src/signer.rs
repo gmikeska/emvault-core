@@ -37,12 +37,12 @@ impl SignerId {
     /// Callers are expected to use a stable, deterministic source — typically
     /// the master fingerprint hex (e.g. `"d34db33f"`) or `"hsm:<serial>:<slot>"`.
     pub fn new(s: impl Into<String>) -> Self {
-        SignerId(s.into())
+        Self(s.into())
     }
 
     /// Create a `SignerId` from a [`Fingerprint`] (hex-encoded).
     pub fn from_fingerprint(fp: Fingerprint) -> Self {
-        SignerId(fp.to_string())
+        Self(fp.to_string())
     }
 
     /// The raw string representation.
@@ -59,7 +59,7 @@ impl fmt::Display for SignerId {
 
 impl From<Fingerprint> for SignerId {
     fn from(fp: Fingerprint) -> Self {
-        SignerId::from_fingerprint(fp)
+        Self::from_fingerprint(fp)
     }
 }
 
@@ -209,6 +209,12 @@ pub trait Signer: Send + Sync {
     fn capabilities(&self) -> SignerCapabilities;
 
     /// Health check — can this signer be reached and is it ready?
+    ///
+    /// # Errors
+    ///
+    /// Implementations return [`SignerError`] when the backing device or
+    /// service is unreachable, rejected authentication, or otherwise cannot
+    /// produce a current health snapshot.
     fn health_check(&self) -> Result<SignerHealth, SignerError>;
 }
 

@@ -42,6 +42,11 @@ pub struct UnsignedPsbt(Psbt);
 
 impl UnsignedPsbt {
     /// Wrap a `Psbt`. Errors if any input has partial signatures.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PsbtError::UnexpectedSignatures`] if any input already has a
+    /// partial signature.
     pub fn new(psbt: Psbt) -> Result<Self, PsbtError> {
         let total_sigs: usize = psbt.inputs.iter().map(|i| i.partial_sigs.len()).sum();
         if total_sigs != 0 {
@@ -112,6 +117,9 @@ pub struct SigningRequest {
 }
 
 /// What the [`SigningCoordinator`] determined for a given signer.
+///
+/// The `External` variant is heap-allocated via [`Box`] to keep the enum
+/// uniformly small (the inner [`SigningRequest`] embeds a full PSBT).
 #[derive(Debug)]
 pub enum SigningAction {
     /// The signer is software-resident (HSM). The coordinator has already
@@ -123,12 +131,16 @@ pub enum SigningAction {
     /// transport `request` to the browser and call
     /// [`SigningCoordinator::receive_signature`] when the browser returns
     /// a signed PSBT.
-    External {
-        /// Data for the browser to forward to the device.
-        request: SigningRequest,
-        /// Optional human-readable instructions for the trustee.
-        instructions: Option<String>,
-    },
+    External(Box<ExternalSigning>),
+}
+
+/// Payload carried by [`SigningAction::External`].
+#[derive(Debug)]
+pub struct ExternalSigning {
+    /// Data for the browser to forward to the device.
+    pub request: SigningRequest,
+    /// Optional human-readable instructions for the trustee.
+    pub instructions: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -173,8 +185,15 @@ impl<'a, S: Signer> SigningCoordinator<'a, S> {
     }
 
     /// Whether the threshold has been met.
+    ///
+    /// # Panics
+    ///
+    /// Panics if more than [`u32::MAX`] distinct signers have contributed
+    /// — practically impossible given federation membership constraints.
     pub fn is_complete(&self) -> bool {
-        self.signatures_collected() as u32 >= self.federation.threshold()
+        let collected = u32::try_from(self.signatures_collected())
+            .expect("signature count fits u32");
+        collected >= self.federation.threshold()
     }
 
     /// Apply software signers via BDK's wallet-level signer dispatch and
@@ -184,16 +203,16 @@ impl<'a, S: Signer> SigningCoordinator<'a, S> {
     /// `wallet` via
     /// [`bdk_wallet::Wallet::add_signer`](bdk_wallet::Wallet::add_signer)
     /// before invoking this method.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PsbtError::BdkSigner`] if BDK rejects the PSBT during
+    /// software-signer dispatch.
     pub fn request_signatures(
         &mut self,
         wallet: &Wallet,
         sign_options: SignOptions,
     ) -> Result<Vec<(SignerId, SigningAction)>, PsbtError> {
-        // Snapshot which signers had partial sigs before software signing so
-        // we can detect new contributions afterward.
-        let before = signers_with_sigs(&self.psbt, self.federation);
-
-        // Dispatch software signers via BDK.
         let _ = wallet
             .sign(&mut self.psbt, sign_options)
             .map_err(|e| PsbtError::BdkSigner(e.to_string()))?;
@@ -202,26 +221,18 @@ impl<'a, S: Signer> SigningCoordinator<'a, S> {
         for id in &after {
             self.signed.insert(id.clone());
         }
-        let newly_signed: HashSet<SignerId> = after.difference(&before).cloned().collect();
 
         // Build per-signer actions.
         let mut actions = Vec::with_capacity(self.federation.signers().len());
         for s in self.federation.signers() {
             let id = s.id();
             let action = match s.signer_type() {
-                SignerType::Software => {
-                    if newly_signed.contains(&id) || self.signed.contains(&id) {
-                        SigningAction::Direct
-                    } else {
-                        // Software signer present but produced no signature
-                        // (perhaps not registered with BDK or refused). Still
-                        // report as Direct so the caller can decide whether
-                        // to retry; the coordinator will not auto-promote
-                        // this to External.
-                        SigningAction::Direct
-                    }
-                }
-                SignerType::External => SigningAction::External {
+                // Either case (newly_signed contained or not, or already
+                // recorded as signed) reports Direct so the caller can decide
+                // whether to retry — we do not auto-promote a Software signer
+                // that produced no partial signature to External.
+                SignerType::Software => SigningAction::Direct,
+                SignerType::External => SigningAction::External(Box::new(ExternalSigning {
                     request: SigningRequest {
                         signer_id: id.clone(),
                         fingerprint: s.fingerprint(),
@@ -232,7 +243,7 @@ impl<'a, S: Signer> SigningCoordinator<'a, S> {
                             "Hand the PSBT to {l} for signing on the connected hardware wallet."
                         )
                     }),
-                },
+                })),
             };
             actions.push((id, action));
         }
@@ -244,6 +255,15 @@ impl<'a, S: Signer> SigningCoordinator<'a, S> {
     /// signatures into the coordinator's PSBT via
     /// [`Psbt::combine`](bitcoin::Psbt::combine), and updates internal
     /// tracking.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PsbtError::UnknownSigner`] if `signer_id` isn't in the
+    /// federation, [`PsbtError::DescriptorMismatch`] if `signed_psbt`
+    /// references a different unsigned transaction,
+    /// [`PsbtError::Bitcoin`] if the PSBT combine call fails, or
+    /// [`PsbtError::InvalidSignature`] if no new partial signature
+    /// attributable to this signer is present.
     pub fn receive_signature(
         &mut self,
         signer_id: &SignerId,
@@ -255,22 +275,19 @@ impl<'a, S: Signer> SigningCoordinator<'a, S> {
             .ok_or_else(|| PsbtError::UnknownSigner(signer_id.clone()))?;
         let fp = signer.fingerprint();
 
-        // Sanity: the returned PSBT must reference the same unsigned tx.
         if signed_psbt.unsigned_tx.compute_txid() != self.psbt.unsigned_tx.compute_txid() {
             return Err(PsbtError::DescriptorMismatch(
                 "returned PSBT does not match this signing session's unsigned transaction".into(),
             ));
         }
-        // Combine partial signatures.
         let mut merged = self.psbt.clone();
         merged
             .combine(signed_psbt)
             .map_err(|e| PsbtError::Bitcoin(e.to_string()))?;
-        // Confirm new sigs attributable to this signer exist.
         let mut found_new = false;
         for (input_idx, input) in merged.inputs.iter().enumerate() {
             let prev_input = self.psbt.inputs.get(input_idx);
-            for (pk, _sig) in &input.partial_sigs {
+            for pk in input.partial_sigs.keys() {
                 let inner: bitcoin::PublicKey = *pk;
                 // The signer "owns" this partial sig if its master fingerprint
                 // appears in either the BIP32 derivation map (P2WSH) or the
@@ -284,9 +301,7 @@ impl<'a, S: Signer> SigningCoordinator<'a, S> {
                     });
 
                 if fp_matches
-                    && !prev_input
-                        .map(|p| p.partial_sigs.contains_key(pk))
-                        .unwrap_or(false)
+                    && !prev_input.is_some_and(|p| p.partial_sigs.contains_key(pk))
                 {
                     found_new = true;
                 }
@@ -307,6 +322,12 @@ impl<'a, S: Signer> SigningCoordinator<'a, S> {
 
     /// Finalize the PSBT once the threshold has been met. Delegates to
     /// [`bdk_wallet::Wallet::finalize_psbt`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PsbtError::InsufficientSignatures`] if the threshold
+    /// hasn't been met, or [`PsbtError::FinalizationFailed`] if BDK refuses
+    /// to finalize or the resulting transaction can't be extracted.
     pub fn finalize(
         mut self,
         wallet: &Wallet,
@@ -345,28 +366,27 @@ fn signers_with_sigs<S: Signer>(psbt: &Psbt, federation: &Federation<S>) -> Hash
         fp_to_id.insert(s.fingerprint(), s.id());
     }
     for input in &psbt.inputs {
-        for (_pk, (fp, _path)) in &input.bip32_derivation {
+        for (fp, _path) in input.bip32_derivation.values() {
             // partial_sigs holds bitcoin::PublicKey -> ecdsa::Signature; we
             // detect a contribution if a partial sig exists for any pk that
             // shares this signer's fingerprint via bip32_derivation.
             if let Some(id) = fp_to_id.get(fp) {
-                let signed_with_fp = input.partial_sigs.iter().any(|(pk, _)| {
+                let signed_with_fp = input.partial_sigs.keys().any(|pk| {
                     input
                         .bip32_derivation
                         .get(&pk.inner)
-                        .map(|(f, _)| f == fp)
-                        .unwrap_or(false)
+                        .is_some_and(|(f, _)| f == fp)
                 });
                 if signed_with_fp {
                     out.insert(id.clone());
                 }
             }
         }
-        for (_xonly, (_lh, (fp, _path))) in &input.tap_key_origins {
-            if let Some(id) = fp_to_id.get(fp) {
-                if !input.tap_script_sigs.is_empty() || input.tap_key_sig.is_some() {
-                    out.insert(id.clone());
-                }
+        for (_lh, (fp, _path)) in input.tap_key_origins.values() {
+            if let Some(id) = fp_to_id.get(fp)
+                && (!input.tap_script_sigs.is_empty() || input.tap_key_sig.is_some())
+            {
+                out.insert(id.clone());
             }
         }
     }
