@@ -63,10 +63,7 @@ fn utxo(amount_sat: u64, idx: u32, script_pubkey: ScriptBuf) -> LocalOutput {
     }
 }
 
-fn assert_destination_belongs_to(
-    plan: &MigrationPlan<UnsignedPsbt>,
-    new_fed: &Federation,
-) {
+fn assert_destination_belongs_to(plan: &MigrationPlan<UnsignedPsbt>, new_fed: &Federation) {
     let new_addr = fed_address(new_fed, 0);
     let new_script = new_addr.script_pubkey();
     for (i, sweep) in plan.sweep_transactions.iter().enumerate() {
@@ -76,7 +73,10 @@ fn assert_destination_belongs_to(
                 new_script,
                 "sweep tx {i} destination must match new federation script_pubkey",
             );
-            assert_eq!(dest, &new_addr, "destination address must equal new federation address",);
+            assert_eq!(
+                dest, &new_addr,
+                "destination address must equal new federation address",
+            );
         }
     }
 }
@@ -124,7 +124,11 @@ fn batched_destination_is_new_federation_for_every_batch() {
     let plan = BatchedSweep::new(3, new_addr)
         .plan(&utxos, &old, &new, FeeRate::from_sat_per_vb_u32(1))
         .unwrap();
-    assert_eq!(plan.sweep_transactions.len(), 3, "7 utxos / 3 = 3 batches (3 + 3 + 1)");
+    assert_eq!(
+        plan.sweep_transactions.len(),
+        3,
+        "7 utxos / 3 = 3 batches (3 + 3 + 1)"
+    );
     assert_destination_belongs_to(&plan, &new);
 }
 
@@ -140,14 +144,12 @@ fn address_for_address_destinations_all_come_from_new_federation() {
     // Two distinct old script_pubkeys (use indexes 0 and 1 of an arbitrary
     // ranged "old" descriptor would be more realistic; for this test we
     // synthesize two distinct script_pubkeys directly).
-    let spk1 = ScriptBuf::from_hex(
-        "0020aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    )
-    .unwrap();
-    let spk2 = ScriptBuf::from_hex(
-        "0020bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    )
-    .unwrap();
+    let spk1 =
+        ScriptBuf::from_hex("0020aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .unwrap();
+    let spk2 =
+        ScriptBuf::from_hex("0020bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+            .unwrap();
     // Map each old script_pubkey to a *distinct* new federation address by
     // deriving at indexes 0 and 1 of the new federation. (Fixed mode treats
     // both as the same single address; we exercise distinct receive indexes
@@ -200,6 +202,13 @@ fn ranged_mode_distinct_destinations_validate_per_index() {
         .unwrap()
         .address(Network::Testnet)
         .unwrap();
-    assert_ne!(a0, a1, "Ranged-mode addresses at indexes 0 and 1 must differ");
-    assert_eq!(a0.script_pubkey().len(), a1.script_pubkey().len(), "P2WSH script lengths match");
+    assert_ne!(
+        a0, a1,
+        "Ranged-mode addresses at indexes 0 and 1 must differ"
+    );
+    assert_eq!(
+        a0.script_pubkey().len(),
+        a1.script_pubkey().len(),
+        "P2WSH script lengths match"
+    );
 }

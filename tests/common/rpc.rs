@@ -112,7 +112,9 @@ impl RpcClient {
             }
             Err(e) => return Err(RpcError::Transport(e.to_string())),
         };
-        let v: Value = resp.into_json().map_err(|e| RpcError::Json(e.to_string()))?;
+        let v: Value = resp
+            .into_json()
+            .map_err(|e| RpcError::Json(e.to_string()))?;
         if let Some(err) = v.get("error").filter(|e| !e.is_null()) {
             let code = err.get("code").and_then(Value::as_i64).unwrap_or(0);
             let message = err
@@ -148,7 +150,10 @@ impl RpcClient {
                 .ok_or_else(|| RpcError::Json("missing 'checksum'".into()))?
                 .to_string(),
             isrange: v.get("isrange").and_then(Value::as_bool).unwrap_or(false),
-            issolvable: v.get("issolvable").and_then(Value::as_bool).unwrap_or(false),
+            issolvable: v
+                .get("issolvable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         })
     }
 
@@ -195,8 +200,7 @@ pub struct DescriptorInfo {
 // ---------------------------------------------------------------------------
 
 fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {
         let b0 = chunk[0];

@@ -137,8 +137,8 @@ impl FederationSnapshot {
                 self.threshold, self.total_signers
             )));
         }
-        let signer_len = u32::try_from(self.signers.len())
-            .expect("federation member count fits u32");
+        let signer_len =
+            u32::try_from(self.signers.len()).expect("federation member count fits u32");
         if signer_len != self.total_signers {
             return Err(SnapshotError::InvalidThreshold(format!(
                 "declared total_signers={} but signer set has length {}",

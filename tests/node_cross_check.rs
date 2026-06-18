@@ -56,7 +56,10 @@ fn rpc_or_skip(test_name: &str) -> Option<RpcClient> {
 }
 
 fn typed_signers(seeds: &[u64], net: Network) -> Vec<MockSigner> {
-    seeds.iter().map(|&s| MockSigner::with_seed(s, net)).collect()
+    seeds
+        .iter()
+        .map(|&s| MockSigner::with_seed(s, net))
+        .collect()
 }
 
 fn dyn_signers(seeds: &[u64], net: Network) -> Vec<Box<dyn Signer>> {
@@ -147,7 +150,11 @@ fn fixed_wsh_descriptor_round_trips_through_core() {
     assert_eq!(addrs.len(), 1, "Fixed mode yields a single address");
 
     let local_addr = local_address_at(fed.descriptor(), Network::Testnet, 0);
-    assert_eq!(addrs[0], local_addr.to_string(), "address must match local derivation");
+    assert_eq!(
+        addrs[0],
+        local_addr.to_string(),
+        "address must match local derivation"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -162,8 +169,8 @@ fn ranged_wsh_descriptor_round_trips_through_core() {
         return;
     };
     let signers = typed_signers(&[1, 2, 3], Network::Testnet);
-    let mut b = DescriptorBuilder::new(2, NetworkType::Bitcoin(Network::Testnet))
-        .key_mode(KeyMode::Ranged);
+    let mut b =
+        DescriptorBuilder::new(2, NetworkType::Bitcoin(Network::Testnet)).key_mode(KeyMode::Ranged);
     for s in &signers {
         b.add_signer(s).unwrap();
     }
@@ -178,7 +185,11 @@ fn ranged_wsh_descriptor_round_trips_through_core() {
     let remote = c
         .deriveaddresses(&info.descriptor, Some([0, 4]))
         .expect("deriveaddresses 0..=4");
-    assert_eq!(remote.len(), 5, "expected 5 addresses for inclusive range 0..=4");
+    assert_eq!(
+        remote.len(),
+        5,
+        "expected 5 addresses for inclusive range 0..=4"
+    );
     for (i, remote_addr) in remote.iter().enumerate() {
         let idx = u32::try_from(i).unwrap();
         let local = local_address_at(&desc, Network::Testnet, idx).to_string();
@@ -218,7 +229,10 @@ fn taproot_mast_descriptor_round_trips_through_core() {
         }
         Err(e) => panic!("bitcoind RPC error on getdescriptorinfo: {e}"),
     };
-    assert!(!info.isrange, "Taproot MAST descriptor (no /*) should be non-ranged");
+    assert!(
+        !info.isrange,
+        "Taproot MAST descriptor (no /*) should be non-ranged"
+    );
     assert_descriptors_equivalent(&local_desc, &info.descriptor, &info.checksum);
 
     let addrs = c

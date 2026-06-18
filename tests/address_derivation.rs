@@ -8,8 +8,8 @@
 #![cfg(feature = "test-utils")]
 
 use asterism_core::{
-    Federation, FederationSnapshot, NetworkType, RecoveryTemplate, Signer, TaprootFederationBuilder,
-    test_utils::MockSigner,
+    Federation, FederationSnapshot, NetworkType, RecoveryTemplate, Signer,
+    TaprootFederationBuilder, test_utils::MockSigner,
 };
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::{Address, Network};
@@ -20,7 +20,10 @@ use miniscript::{Descriptor, DescriptorPublicKey};
 // ---------------------------------------------------------------------------
 
 fn typed_signers(seeds: &[u64], net: Network) -> Vec<MockSigner> {
-    seeds.iter().map(|&s| MockSigner::with_seed(s, net)).collect()
+    seeds
+        .iter()
+        .map(|&s| MockSigner::with_seed(s, net))
+        .collect()
 }
 
 fn dyn_signers(seeds: &[u64], net: Network) -> Vec<Box<dyn Signer>> {
@@ -44,11 +47,7 @@ fn derive_address(desc: &Descriptor<DescriptorPublicKey>, net: Network) -> Addre
         .expect("descriptor must produce an address")
 }
 
-fn derive_address_at(
-    desc: &Descriptor<DescriptorPublicKey>,
-    net: Network,
-    idx: u32,
-) -> Address {
+fn derive_address_at(desc: &Descriptor<DescriptorPublicKey>, net: Network, idx: u32) -> Address {
     desc.at_derivation_index(idx)
         .expect("valid derivation index")
         .address(net)
@@ -68,9 +67,12 @@ fn parse_descriptor(s: &str) -> Descriptor<DescriptorPublicKey> {
 
 #[test]
 fn fixed_mode_yields_p2wsh_testnet_address() {
-    let fed: Federation =
-        Federation::new(2, dyn_signers(&[1, 2, 3], Network::Testnet), Network::Testnet.into())
-            .expect("valid federation");
+    let fed: Federation = Federation::new(
+        2,
+        dyn_signers(&[1, 2, 3], Network::Testnet),
+        Network::Testnet.into(),
+    )
+    .expect("valid federation");
     let addr = derive_address(fed.descriptor(), Network::Testnet);
     assert_eq!(addr.address_type(), Some(bitcoin::AddressType::P2wsh));
     let s = addr.to_string();
@@ -82,12 +84,18 @@ fn fixed_mode_yields_p2wsh_testnet_address() {
 
 #[test]
 fn fixed_mode_address_is_deterministic_across_builds() {
-    let f1: Federation =
-        Federation::new(2, dyn_signers(&[1, 2, 3], Network::Testnet), Network::Testnet.into())
-            .unwrap();
-    let f2: Federation =
-        Federation::new(2, dyn_signers(&[3, 1, 2], Network::Testnet), Network::Testnet.into())
-            .unwrap();
+    let f1: Federation = Federation::new(
+        2,
+        dyn_signers(&[1, 2, 3], Network::Testnet),
+        Network::Testnet.into(),
+    )
+    .unwrap();
+    let f2: Federation = Federation::new(
+        2,
+        dyn_signers(&[3, 1, 2], Network::Testnet),
+        Network::Testnet.into(),
+    )
+    .unwrap();
     let a1 = derive_address(f1.descriptor(), Network::Testnet);
     let a2 = derive_address(f2.descriptor(), Network::Testnet);
     assert_eq!(a1, a2, "sortedmulti must canonicalize order");
@@ -115,8 +123,8 @@ fn ranged_mode_yields_distinct_addresses_per_index() {
     use asterism_core::descriptor::{DescriptorBuilder, KeyMode};
 
     let signers = typed_signers(&[1, 2, 3], Network::Testnet);
-    let mut b = DescriptorBuilder::new(2, NetworkType::Bitcoin(Network::Testnet))
-        .key_mode(KeyMode::Ranged);
+    let mut b =
+        DescriptorBuilder::new(2, NetworkType::Bitcoin(Network::Testnet)).key_mode(KeyMode::Ranged);
     for s in &signers {
         b.add_signer(s).unwrap();
     }
@@ -131,7 +139,10 @@ fn ranged_mode_yields_distinct_addresses_per_index() {
             a.to_string().starts_with("tb1q"),
             "expected testnet P2WSH at index {idx}, got {a}"
         );
-        assert!(seen.insert(a), "address at index {idx} collided with a prior index");
+        assert!(
+            seen.insert(a),
+            "address at index {idx} collided with a prior index"
+        );
     }
     assert_eq!(seen.len(), indexes.len());
 }
@@ -327,5 +338,8 @@ fn signet_address_uses_testnet_hrp() {
     )
     .unwrap();
     let a = derive_address(f_signet.descriptor(), Network::Signet);
-    assert!(a.to_string().starts_with("tb1q"), "signet shares testnet HRP, got {a}");
+    assert!(
+        a.to_string().starts_with("tb1q"),
+        "signet shares testnet HRP, got {a}"
+    );
 }

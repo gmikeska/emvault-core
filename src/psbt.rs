@@ -191,8 +191,8 @@ impl<'a, S: Signer> SigningCoordinator<'a, S> {
     /// Panics if more than [`u32::MAX`] distinct signers have contributed
     /// — practically impossible given federation membership constraints.
     pub fn is_complete(&self) -> bool {
-        let collected = u32::try_from(self.signatures_collected())
-            .expect("signature count fits u32");
+        let collected =
+            u32::try_from(self.signatures_collected()).expect("signature count fits u32");
         collected >= self.federation.threshold()
     }
 
@@ -300,9 +300,7 @@ impl<'a, S: Signer> SigningCoordinator<'a, S> {
                         *f == fp && *k == inner.inner.x_only_public_key().0
                     });
 
-                if fp_matches
-                    && !prev_input.is_some_and(|p| p.partial_sigs.contains_key(pk))
-                {
+                if fp_matches && !prev_input.is_some_and(|p| p.partial_sigs.contains_key(pk)) {
                     found_new = true;
                 }
             }
