@@ -153,15 +153,22 @@ byte-stable: equivalent snapshots always serialize to identical bytes.
 ```sh
 cargo build
 cargo test
-cargo test --features test-utils  # also runs property tests
+cargo test --features test-utils                    # property + address-derivation tests
+cargo test --features "test-utils node-tests"       # + Bitcoin Core RPC cross-check
 cargo doc --no-deps
 ```
 
+`node-tests` reads `BITCOIN_RPC_*` from `.env` and cross-validates
+descriptors and addresses against a running `bitcoind` via
+`getdescriptorinfo`/`deriveaddresses`. Tests skip gracefully when the env
+vars are missing or the node is unreachable.
+
 ## Cargo features
 
-| Feature      | Default | Effect                                                  |
-| ------------ | ------- | ------------------------------------------------------- |
-| `test-utils` | off     | Re-exports `MockSigner` for downstream test suites.     |
+| Feature       | Default | Effect                                                                |
+| ------------- | ------- | --------------------------------------------------------------------- |
+| `test-utils`  | off     | Re-exports `MockSigner` for downstream test suites.                   |
+| `node-tests`  | off     | Enables the `node_cross_check` integration tests against `bitcoind`.  |
 
 ## License
 

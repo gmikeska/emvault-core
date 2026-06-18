@@ -9,6 +9,8 @@ license = "MIT OR Apache-2.0"
 default = []
 # Expose `MockSigner` and other test scaffolding to downstream crates.
 test-utils = []
+# Enable RPC tests against an external bitcoind via .env (BITCOIN_RPC_*).
+node-tests = []
 
 [dependencies]
 bdk_wallet = "3.1.0"
@@ -24,3 +26,5 @@ thiserror = "2.0.18"
 [dev-dependencies]
 proptest = "1.11.0"
 rand = "0.10.1"
+ureq = { version = "2.10", features = ["json"] }
+dotenvy = "0.15.7"

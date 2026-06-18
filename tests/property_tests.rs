@@ -101,6 +101,31 @@ proptest! {
             matches!(err, FederationError::ThresholdExceedsSignerCount { .. });
         prop_assert!(is_threshold_err);
     }
+
+    /// Any valid `(m, n)` produces a descriptor that derives a parseable
+    /// testnet P2WSH address whose `script_pubkey` matches the
+    /// descriptor's `script_pubkey()`.
+    #[test]
+    fn arbitrary_m_of_n_derives_p2wsh_address_matching_script(
+        n in 2u32..=8u32,
+        m_offset in 0u32..=7u32,
+    ) {
+        let m = (m_offset % n).max(1);
+        let seeds: Vec<u64> = (1..=u64::from(n)).collect();
+        let signers = harness::make_signers(&seeds);
+        let fed = Federation::new(m, signers, NetworkType::Bitcoin(Network::Testnet))
+            .expect("valid federation");
+        let definite = fed
+            .descriptor()
+            .at_derivation_index(0)
+            .expect("derivation index 0 valid");
+        let address = definite
+            .address(Network::Testnet)
+            .expect("descriptor must produce an address");
+        prop_assert_eq!(address.address_type(), Some(bitcoin::AddressType::P2wsh));
+        prop_assert!(address.to_string().starts_with("tb1q"));
+        prop_assert_eq!(address.script_pubkey(), definite.script_pubkey());
+    }
 }
 
 // ---------------------------------------------------------------------------
