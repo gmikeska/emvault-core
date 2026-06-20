@@ -198,13 +198,23 @@ fn build_descriptor_key(
 /// BIP-389 multipath descriptor that covers both the external (`/0/*`) and
 /// internal (`/1/*`) keychains.
 ///
+/// `Descriptor::to_string()` always appends a `#checksum` suffix computed
+/// over the single-path body. Rewriting `/0/*` → `/<0;1>/*` would invalidate
+/// that checksum, and downstream parsers (miniscript, BDK) reject the result
+/// with `The provided descriptor doesn't match its checksum`. We therefore
+/// strip the suffix before substituting and return a checksum-less string —
+/// every consumer of multipath descriptors in this codebase
+/// (BDK's `Wallet::create_from_two_path_descriptor`, miniscript's
+/// `Descriptor::from_str`) accepts a body without a checksum and computes
+/// the canonical one internally.
+///
 /// Returns the multipath descriptor as a string. Use
 /// `<miniscript::Descriptor as std::str::FromStr>::from_str` to re-parse if a
 /// typed descriptor is needed.
 pub fn to_multipath_string(desc: &Descriptor<DescriptorPublicKey>) -> String {
     let s = desc.to_string();
-    // Swap each `/0/*` token (preceded by an xpub character) with `/<0;1>/*`.
-    s.replace("/0/*", "/<0;1>/*")
+    let body = s.split_once('#').map_or(s.as_str(), |(b, _)| b);
+    body.replace("/0/*", "/<0;1>/*")
 }
 
 #[cfg(test)]
@@ -288,5 +298,43 @@ mod tests {
         let mp = to_multipath_string(&desc);
         assert!(mp.contains("/<0;1>/*"));
         assert!(!mp.contains("/0/*"));
+    }
+
+    #[test]
+    fn multipath_helper_strips_stale_checksum() {
+        // Regression: `Descriptor::to_string()` appends a `#checksum`
+        // computed over the single-path body. Naively replacing `/0/*`
+        // leaves that stale checksum attached and downstream parsers
+        // reject it. The helper must drop the suffix before substitution.
+        let signers = three_signers();
+        let mut b = DescriptorBuilder::new(2, NetworkType::Bitcoin(Network::Testnet))
+            .key_mode(KeyMode::Ranged);
+        for s in &signers {
+            b.add_signer(s).unwrap();
+        }
+        let desc = b.build().unwrap();
+        let mp = to_multipath_string(&desc);
+        assert!(
+            !mp.contains('#'),
+            "multipath string must not carry the stale single-path checksum, got {mp}"
+        );
+    }
+
+    #[test]
+    fn multipath_helper_output_parses_back() {
+        // The multipath string must round-trip through miniscript so
+        // BDK's `Wallet::create_from_two_path_descriptor` accepts it.
+        use std::str::FromStr;
+
+        let signers = three_signers();
+        let mut b = DescriptorBuilder::new(2, NetworkType::Bitcoin(Network::Testnet))
+            .key_mode(KeyMode::Ranged);
+        for s in &signers {
+            b.add_signer(s).unwrap();
+        }
+        let desc = b.build().unwrap();
+        let mp = to_multipath_string(&desc);
+        miniscript::Descriptor::<DescriptorPublicKey>::from_str(&mp)
+            .expect("miniscript should accept the checksum-less multipath descriptor");
     }
 }
