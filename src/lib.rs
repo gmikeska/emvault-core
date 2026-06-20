@@ -66,6 +66,15 @@
 //!    signed one is required) are unrepresentable via newtype wrappers.
 //! 5. Security — private keys never transit through the library in plaintext;
 //!    XPUBs, sighashes, and signatures only.
+//!
+//! ## Cargo features
+//!
+//! - `test-utils` — re-exports `MockSigner` and other test scaffolding.
+//! - `node-tests` — gates RPC-driven tests against an external `bitcoind`.
+//! - `elements` — adds the `NetworkType::Elements` variant and
+//!   `ElementsNetworkId` enum, consumed by the
+//!   [`asterism-elements`](https://docs.rs/asterism-elements) companion crate.
+//!   No additional dependencies are pulled in by enabling this feature.
 
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
@@ -102,6 +111,8 @@ pub use migration::{
     AddressForAddressSweep, BatchedSweep, ConsolidationSweep, FederationMigration, MigrationPlan,
     SweepAlgorithm, SweepTransaction,
 };
+#[cfg(feature = "elements")]
+pub use network::ElementsNetworkId;
 pub use network::NetworkType;
 pub use psbt::{FinalizedPsbt, SigningAction, SigningCoordinator, SigningRequest, UnsignedPsbt};
 pub use recovery::{RecoveryInstructions, RecoverySoftware, RecoveryTemplate};

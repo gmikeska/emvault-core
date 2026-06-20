@@ -11,10 +11,14 @@ default = []
 test-utils = []
 # Enable RPC tests against an external bitcoind via .env (BITCOIN_RPC_*).
 node-tests = []
+# Enable Elements/Liquid-aware types in `NetworkType`. The actual Elements
+# pipeline lives in the `asterism-elements` companion crate; this feature only
+# adds the discriminant variants `asterism-elements` needs to refer to.
+elements = []
 
 [dependencies]
 bdk_wallet = "3.1.0"
-bitcoin = "0.32.100"
+bitcoin = "0.32.10"
 hex = "0.4.3"
 miniscript = "12.3.7"
 serde = "1.0.228"

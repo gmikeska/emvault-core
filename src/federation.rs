@@ -22,10 +22,27 @@ use crate::signer::{Signer, SignerId};
 /// signer collections (HSM + consumer hardware) work out of the box. Concrete
 /// `S` types are useful when the consumer wants compile-time access to
 /// backend-specific methods.
+///
+/// ## Elements / Liquid networks
+///
+/// When `network` is `NetworkType::Elements` (only possible with the
+/// `elements` cargo feature), the federation does **not** carry a Bitcoin
+/// `miniscript::Descriptor`. The Elements descriptor type
+/// (`elements_miniscript::ConfidentialDescriptor`) lives in the
+/// [`asterism-elements`](https://docs.rs/asterism-elements) companion
+/// crate and is built via `CtDescriptorBuilder`. Calling
+/// [`Federation::descriptor`] or [`Federation::descriptor_string`] on an
+/// Elements federation will panic with a clear message; use
+/// [`Federation::try_descriptor`] for code that needs to handle both
+/// network families uniformly.
 pub struct Federation<S: Signer = Box<dyn Signer>> {
     threshold: u32,
     signers: Vec<S>,
-    descriptor: Descriptor<DescriptorPublicKey>,
+    /// `None` for Elements federations; the Elements descriptor type lives
+    /// in `asterism-elements` and is built separately via
+    /// `CtDescriptorBuilder`.
+    descriptor: Option<Descriptor<DescriptorPublicKey>>,
+    /// Empty for Elements federations. See `descriptor` field comment.
     descriptor_string: String,
     network: NetworkType,
     key_mode: KeyMode,
@@ -80,8 +97,16 @@ impl<S: Signer> Federation<S> {
         key_mode: KeyMode,
     ) -> Result<Self, FederationError> {
         validate_inputs(threshold, &signers, network)?;
-        let descriptor = build_descriptor(threshold, &signers, network, key_mode)?;
-        let descriptor_string = descriptor.to_string();
+        // Bitcoin networks build a `wsh(sortedmulti(...))` descriptor here.
+        // Elements networks defer to the `asterism-elements` crate's
+        // `CtDescriptorBuilder` and store no Bitcoin descriptor.
+        let (descriptor, descriptor_string) = if network.is_bitcoin() {
+            let desc = build_descriptor(threshold, &signers, network, key_mode)?;
+            let s = desc.to_string();
+            (Some(desc), s)
+        } else {
+            (None, String::new())
+        };
         Ok(Self {
             threshold,
             signers,
@@ -123,18 +148,40 @@ impl<S: Signer> Federation<S> {
         self.created_at
     }
 
-    /// The canonical output descriptor.
+    /// The canonical Bitcoin output descriptor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this is an Elements federation. Use
+    /// [`Federation::try_descriptor`] to handle both network families
+    /// uniformly, or build an Elements descriptor via
+    /// `asterism_elements::CtDescriptorBuilder`.
     pub fn descriptor(&self) -> &Descriptor<DescriptorPublicKey> {
-        &self.descriptor
+        self.descriptor.as_ref().expect(
+            "Federation::descriptor() called on a non-Bitcoin federation; use \
+             asterism_elements::CtDescriptorBuilder for Elements federations or \
+             Federation::try_descriptor() for code that handles both",
+        )
     }
 
-    /// The canonical output descriptor as a string.
+    /// The canonical Bitcoin output descriptor, if this is a Bitcoin
+    /// federation.
+    pub fn try_descriptor(&self) -> Option<&Descriptor<DescriptorPublicKey>> {
+        self.descriptor.as_ref()
+    }
+
+    /// The canonical Bitcoin output descriptor as a string.
+    ///
+    /// Returns an empty string for Elements federations — see
+    /// [`Federation::descriptor`] for the rationale.
     pub fn descriptor_string(&self) -> &str {
         &self.descriptor_string
     }
 
-    /// The descriptor with a `#checksum` suffix appended (in the standard
-    /// rust-miniscript format).
+    /// The Bitcoin descriptor with a `#checksum` suffix appended (in the
+    /// standard rust-miniscript format).
+    ///
+    /// Returns an empty string for Elements federations.
     pub fn descriptor_with_checksum(&self) -> String {
         // `Descriptor::to_string()` already includes the `#checksum`.
         self.descriptor_string.clone()
