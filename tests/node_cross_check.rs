@@ -12,15 +12,13 @@
 //! ```
 #![cfg(all(feature = "test-utils", feature = "node-tests"))]
 
-use asterism_core::{
-    Federation, NetworkType, Signer, TaprootFederationBuilder, test_utils::MockSigner,
-};
+use asterism_core::{Federation, NetworkType, Signer, test_utils::MockSigner};
 use bitcoin::Network;
 use miniscript::{Descriptor, DescriptorPublicKey};
 
 mod common;
 
-use common::rpc::{RpcClient, RpcError};
+use common::rpc::RpcClient;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -67,10 +65,6 @@ fn dyn_signers(seeds: &[u64], net: Network) -> Vec<Box<dyn Signer>> {
         .iter()
         .map(|&s| Box::new(MockSigner::with_seed(s, net)) as Box<dyn Signer>)
         .collect()
-}
-
-fn hsm_signers(seeds: &[u64], net: Network) -> Vec<MockSigner> {
-    seeds.iter().map(|&s| MockSigner::hsm(s, net)).collect()
 }
 
 /// Derive the address at `idx` from a descriptor (works for both wildcard
@@ -200,54 +194,3 @@ fn ranged_wsh_descriptor_round_trips_through_core() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Taproot MAST (no wildcard, single address)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn taproot_mast_descriptor_round_trips_through_core() {
-    let Some(c) = rpc_or_skip("taproot_mast_descriptor_round_trips_through_core") else {
-        return;
-    };
-    let mut b = TaprootFederationBuilder::<MockSigner>::new(Network::Testnet.into());
-    for s in hsm_signers(&[1, 2], Network::Testnet) {
-        b.add_hsm_signer(s);
-    }
-    for s in hsm_signers(&[10, 11], Network::Testnet) {
-        b.add_wallet_signer(s);
-    }
-    b.mixed_threshold(2);
-    let fed = b.build().unwrap();
-    let local_desc = fed.descriptor_string().to_string();
-
-    let info = match c.getdescriptorinfo(&local_desc) {
-        Ok(i) => i,
-        Err(RpcError::Rpc { code, message }) => {
-            // Some Bitcoin Core builds reject unfamiliar tr() variants.
-            // Surface the error rather than silently passing.
-            panic!("bitcoind rejected tr descriptor (code={code}): {message}\ndesc: {local_desc}");
-        }
-        Err(e) => panic!("bitcoind RPC error on getdescriptorinfo: {e}"),
-    };
-    assert!(
-        !info.isrange,
-        "Taproot MAST descriptor (no /*) should be non-ranged"
-    );
-    assert_descriptors_equivalent(&local_desc, &info.descriptor, &info.checksum);
-
-    let addrs = c
-        .deriveaddresses(&info.descriptor, None)
-        .expect("deriveaddresses tr");
-    assert_eq!(addrs.len(), 1, "Taproot MAST yields a single address");
-    let local_addr = local_address_at(fed.descriptor(), Network::Testnet, 0);
-    assert_eq!(
-        addrs[0],
-        local_addr.to_string(),
-        "tr() address must match local derivation"
-    );
-    assert!(
-        addrs[0].starts_with("tb1p"),
-        "expected testnet P2TR (tb1p...), got {}",
-        addrs[0]
-    );
-}

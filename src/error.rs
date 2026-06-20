@@ -76,9 +76,6 @@ pub enum FederationError {
         /// The missing capability (e.g. `"taproot"`, `"blind_signing"`).
         capability: &'static str,
     },
-    /// Taproot federation builder rejected the input.
-    #[error("invalid taproot federation: {0}")]
-    InvalidTaproot(String),
     /// Wrapped descriptor error.
     #[error(transparent)]
     Descriptor(#[from] DescriptorError),

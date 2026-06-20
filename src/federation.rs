@@ -233,47 +233,6 @@ impl<S: Signer + Clone> Federation<S> {
 }
 
 // ---------------------------------------------------------------------------
-// Internal constructor used by TaprootFederationBuilder
-// ---------------------------------------------------------------------------
-
-/// Internal constructor surface used by [`crate::TaprootFederationBuilder`].
-///
-/// Not part of the stable public API — please construct federations through
-/// [`Federation::new`] or the Taproot builder.
-#[doc(hidden)]
-pub struct FederationCtor;
-
-impl FederationCtor {
-    /// Build a `Federation` from a pre-constructed descriptor (e.g. one
-    /// produced by the Taproot MAST builder). Performs the same input
-    /// validation as `Federation::new` but skips descriptor construction.
-    ///
-    /// # Errors
-    ///
-    /// Same conditions as [`Federation::new`].
-    pub fn from_parts<S: Signer>(
-        threshold: u32,
-        signers: Vec<S>,
-        network: NetworkType,
-        descriptor: Descriptor<DescriptorPublicKey>,
-    ) -> Result<Federation<S>, FederationError> {
-        validate_inputs(threshold, &signers, network)?;
-        let descriptor_string = descriptor.to_string();
-        Ok(Federation {
-            threshold,
-            signers,
-            descriptor,
-            descriptor_string,
-            network,
-            // Taproot federations don't fit the wsh KeyMode discriminant; we
-            // use Fixed as an inert placeholder for now.
-            key_mode: KeyMode::Fixed,
-            created_at: SystemTime::now(),
-        })
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

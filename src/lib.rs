@@ -19,8 +19,6 @@
 //! - [`Federation`] — an m-of-n multi-signature group with mutation APIs
 //!   (`rotate_signer`, `add_signer`, `remove_signer`, `change_threshold`).
 //! - [`DescriptorBuilder`] — `wsh(sortedmulti(...))` descriptor construction.
-//! - [`TaprootFederationBuilder`] — Taproot MAST descriptors for hybrid
-//!   federations with HSM-only, wallet-only, and mixed spending paths.
 //! - [`SigningCoordinator`] — routes signing across software (HSM) and external
 //!   (browser-side hardware wallet) signers, delegating to BDK's
 //!   [`Wallet::sign`](bdk_wallet::Wallet::sign) for software signers.
@@ -87,7 +85,6 @@ pub mod psbt;
 pub mod recovery;
 pub mod signer;
 pub mod snapshot;
-pub mod taproot;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
@@ -112,7 +109,6 @@ pub use signer::{
     DeviceType, Signer, SignerCapabilities, SignerHealth, SignerId, SignerType, TransportType,
 };
 pub use snapshot::{FederationSnapshot, SignerSnapshot};
-pub use taproot::TaprootFederationBuilder;
 
 /// Re-export of [`bitcoin`] crate types for downstream convenience.
 pub use bitcoin;

@@ -2,14 +2,13 @@
 //!
 //! These tests are pure-local: they never touch a network or an HSM. They
 //! verify the chain of `Federation` -> `Descriptor` -> `Address` is sound and
-//! deterministic for Fixed wsh, Ranged wsh, and Taproot MAST descriptors.
+//! deterministic for Fixed wsh and Ranged wsh descriptors.
 //!
 //! Run with: `cargo test -p asterism-core --features test-utils --test address_derivation`.
 #![cfg(feature = "test-utils")]
 
 use asterism_core::{
-    Federation, FederationSnapshot, NetworkType, RecoveryTemplate, Signer,
-    TaprootFederationBuilder, test_utils::MockSigner,
+    Federation, FederationSnapshot, NetworkType, RecoveryTemplate, Signer, test_utils::MockSigner,
 };
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::{Address, Network};
@@ -31,10 +30,6 @@ fn dyn_signers(seeds: &[u64], net: Network) -> Vec<Box<dyn Signer>> {
         .iter()
         .map(|&s| Box::new(MockSigner::with_seed(s, net)) as Box<dyn Signer>)
         .collect()
-}
-
-fn hsm_signers(seeds: &[u64], net: Network) -> Vec<MockSigner> {
-    seeds.iter().map(|&s| MockSigner::hsm(s, net)).collect()
 }
 
 /// Derive the address at index 0 for any descriptor (works for both
@@ -148,47 +143,6 @@ fn ranged_mode_yields_distinct_addresses_per_index() {
 }
 
 // ---------------------------------------------------------------------------
-// Taproot MAST
-// ---------------------------------------------------------------------------
-
-#[test]
-fn taproot_mast_yields_p2tr_testnet_address() {
-    let mut b = TaprootFederationBuilder::<MockSigner>::new(Network::Testnet.into());
-    for s in hsm_signers(&[1, 2], Network::Testnet) {
-        b.add_hsm_signer(s);
-    }
-    for s in hsm_signers(&[10, 11], Network::Testnet) {
-        b.add_wallet_signer(s);
-    }
-    b.mixed_threshold(2);
-    let fed = b.build().unwrap();
-    let addr = derive_address(fed.descriptor(), Network::Testnet);
-    assert_eq!(addr.address_type(), Some(bitcoin::AddressType::P2tr));
-    assert!(
-        addr.to_string().starts_with("tb1p"),
-        "expected testnet P2TR (tb1p...) prefix, got {addr}"
-    );
-}
-
-#[test]
-fn taproot_mast_address_is_deterministic() {
-    let build = || -> Federation<MockSigner> {
-        let mut b = TaprootFederationBuilder::<MockSigner>::new(Network::Testnet.into());
-        for s in hsm_signers(&[1, 2], Network::Testnet) {
-            b.add_hsm_signer(s);
-        }
-        for s in hsm_signers(&[10, 11], Network::Testnet) {
-            b.add_wallet_signer(s);
-        }
-        b.mixed_threshold(2);
-        b.build().unwrap()
-    };
-    let a1 = derive_address(build().descriptor(), Network::Testnet);
-    let a2 = derive_address(build().descriptor(), Network::Testnet);
-    assert_eq!(a1, a2);
-}
-
-// ---------------------------------------------------------------------------
 // Mutations preserve derivability and shift addresses where expected
 // ---------------------------------------------------------------------------
 
@@ -281,25 +235,6 @@ fn snapshot_descriptor_matches_federation_address() {
     let a_fed = derive_address(fed.descriptor(), Network::Testnet);
     let a_snap = derive_address(&parsed, Network::Testnet);
     assert_eq!(a_fed, a_snap);
-}
-
-#[test]
-fn snapshot_descriptor_for_taproot_matches_federation_address() {
-    let mut b = TaprootFederationBuilder::<MockSigner>::new(Network::Testnet.into());
-    for s in hsm_signers(&[1, 2], Network::Testnet) {
-        b.add_hsm_signer(s);
-    }
-    for s in hsm_signers(&[10, 11], Network::Testnet) {
-        b.add_wallet_signer(s);
-    }
-    b.mixed_threshold(2);
-    let fed = b.build().unwrap();
-    let snapshot = FederationSnapshot::from_federation(&fed);
-    let parsed = parse_descriptor(&snapshot.descriptor);
-    let a_fed = derive_address(fed.descriptor(), Network::Testnet);
-    let a_snap = derive_address(&parsed, Network::Testnet);
-    assert_eq!(a_fed, a_snap);
-    assert_eq!(a_fed.address_type(), Some(bitcoin::AddressType::P2tr));
 }
 
 // ---------------------------------------------------------------------------
