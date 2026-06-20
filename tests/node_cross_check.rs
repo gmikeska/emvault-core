@@ -193,4 +193,3 @@ fn ranged_wsh_descriptor_round_trips_through_core() {
         );
     }
 }
-
