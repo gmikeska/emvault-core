@@ -49,6 +49,20 @@ pub struct Federation<S: Signer = Box<dyn Signer>> {
     created_at: SystemTime,
 }
 
+impl<S: Signer + Clone> Clone for Federation<S> {
+    fn clone(&self) -> Self {
+        Self {
+            threshold: self.threshold,
+            signers: self.signers.clone(),
+            descriptor: self.descriptor.clone(),
+            descriptor_string: self.descriptor_string.clone(),
+            network: self.network,
+            key_mode: self.key_mode,
+            created_at: self.created_at,
+        }
+    }
+}
+
 impl<S: Signer> std::fmt::Debug for Federation<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Federation")

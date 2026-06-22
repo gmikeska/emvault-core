@@ -87,6 +87,7 @@
 
 pub mod descriptor;
 pub mod error;
+pub mod federated_wallet;
 pub mod federation;
 pub mod migration;
 pub mod network;
@@ -103,9 +104,10 @@ pub use test_utils::MockSigner;
 
 pub use descriptor::DescriptorBuilder;
 pub use error::{
-    AsterismError, DescriptorError, FederationError, MigrationError, PsbtError, RecoveryError,
-    SignerError, SnapshotError,
+    AsterismError, DescriptorError, FederatedWalletError, FederationError, MigrationError,
+    PsbtError, RecoveryError, SignerError, SnapshotError,
 };
+pub use federated_wallet::{BtcFederatedWallet, FederatedWallet, FederationWallet};
 pub use federation::Federation;
 pub use migration::{
     AddressForAddressSweep, BatchedSweep, ConsolidationSweep, FederationMigration, MigrationPlan,

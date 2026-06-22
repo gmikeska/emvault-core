@@ -31,6 +31,9 @@ pub enum AsterismError {
     /// Federation migration error.
     #[error(transparent)]
     Migration(#[from] MigrationError),
+    /// Federated wallet error.
+    #[error(transparent)]
+    FederatedWallet(#[from] FederatedWalletError),
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +247,30 @@ pub enum SnapshotError {
 // ---------------------------------------------------------------------------
 // Migration
 // ---------------------------------------------------------------------------
+
+/// Errors from [`crate::federated_wallet::FederatedWallet`] operations.
+#[derive(Debug, thiserror::Error)]
+pub enum FederatedWalletError {
+    /// A federation being added has a different network than existing federations.
+    #[error("network mismatch: existing {existing}, incoming {incoming}")]
+    NetworkMismatch {
+        /// The network of the existing federations.
+        existing: NetworkType,
+        /// The network of the federation being added.
+        incoming: NetworkType,
+    },
+    /// A non-Bitcoin federation was passed to `BtcFederatedWallet`.
+    #[error("BtcFederatedWallet requires a Bitcoin network federation")]
+    NonBitcoinNetwork,
+    /// An index was out of bounds.
+    #[error("federation index {index} out of bounds (count: {count})")]
+    IndexOutOfBounds {
+        /// The requested index.
+        index: usize,
+        /// The number of federations in the wallet.
+        count: usize,
+    },
+}
 
 /// Errors from federation migration / sweep planning.
 #[derive(Debug, thiserror::Error)]
