@@ -262,6 +262,9 @@ pub enum FederatedWalletError {
     /// A non-Bitcoin federation was passed to `BtcFederatedWallet`.
     #[error("BtcFederatedWallet requires a Bitcoin network federation")]
     NonBitcoinNetwork,
+    /// A non-Elements federation was passed to `ElementsFederatedWallet`.
+    #[error("ElementsFederatedWallet requires an Elements network federation")]
+    NonElementsNetwork,
     /// An index was out of bounds.
     #[error("federation index {index} out of bounds (count: {count})")]
     IndexOutOfBounds {
