@@ -121,7 +121,7 @@ pub use recovery::{RecoveryInstructions, RecoverySoftware, RecoveryTemplate};
 pub use signer::{
     DeviceType, Signer, SignerCapabilities, SignerHealth, SignerId, SignerType, TransportType,
 };
-pub use snapshot::{FederationSnapshot, SignerSnapshot};
+pub use snapshot::{FederatedWalletSnapshot, FederationSnapshot, SignerSnapshot};
 
 /// Re-export of [`bitcoin`] crate types for downstream convenience.
 pub use bitcoin;

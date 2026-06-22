@@ -15,11 +15,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use bdk_wallet::LocalOutput;
-use bitcoin::Amount;
+use bitcoin::{Amount, FeeRate};
 
-use crate::error::FederatedWalletError;
+use crate::error::{FederatedWalletError, MigrationError};
 use crate::federation::Federation;
+use crate::migration::{MigrationPlan, SweepAlgorithm};
 use crate::network::NetworkType;
+use crate::psbt::UnsignedPsbt;
 use crate::signer::{Signer, SignerId};
 
 // ---------------------------------------------------------------------------
@@ -218,6 +220,50 @@ impl<S: Signer> BtcFederatedWallet<S> {
         self.federation_wallets
             .iter()
             .map(|fw| fw.wallet.as_ref())
+    }
+
+}
+
+impl BtcFederatedWallet<Box<dyn Signer>> {
+    /// For each non-current federation wallet with a non-zero balance, produce
+    /// a migration plan sweeping its UTXOs to the current federation's wallet.
+    ///
+    /// Each result is tagged with the source federation index. The sweep
+    /// algorithm and fee rate are caller-supplied; PSBT construction uses the
+    /// source federation's `bdk_wallet::Wallet` instance (it has the descriptor
+    /// needed to build the spending transaction).
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`MigrationError`] encountered from the sweep
+    /// algorithm.
+    pub fn plan_migrations(
+        &self,
+        sweep: &dyn SweepAlgorithm<LocalOutput, UnsignedPsbt>,
+        fee_rate: FeeRate,
+    ) -> Result<Vec<(usize, MigrationPlan<UnsignedPsbt>)>, MigrationError> {
+        let current = self
+            .federation_wallets
+            .last()
+            .expect("BtcFederatedWallet always has at least one federation");
+        let mut plans = Vec::new();
+        for fw in &self.federation_wallets {
+            if fw.index == current.index {
+                continue;
+            }
+            let utxos: Vec<LocalOutput> = fw.wallet.list_unspent().collect();
+            if utxos.is_empty() {
+                continue;
+            }
+            let plan = sweep.plan(
+                &utxos,
+                &fw.federation,
+                &current.federation,
+                fee_rate,
+            )?;
+            plans.push((fw.index, plan));
+        }
+        Ok(plans)
     }
 }
 

@@ -162,6 +162,99 @@ impl FederationSnapshot {
     }
 }
 
+// ---------------------------------------------------------------------------
+// FederatedWalletSnapshot
+// ---------------------------------------------------------------------------
+
+/// A snapshot of an entire [`FederatedWallet`](crate::federated_wallet::FederatedWallet),
+/// capturing every historical federation version in order.
+///
+/// Wallet instances are runtime handles and are **not** serialized — the
+/// application reconstructs them on startup from the snapshot's federation
+/// list.
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FederatedWalletSnapshot {
+    /// All federation snapshots, ordered oldest-first.
+    pub federations: Vec<FederationSnapshot>,
+    /// The network all federations operate on.
+    pub network: NetworkType,
+    /// Snapshot creation timestamp (Unix seconds).
+    #[serde_as(as = "TimestampSeconds<i64>")]
+    pub created_at: SystemTime,
+}
+
+impl FederatedWalletSnapshot {
+    /// Construct a snapshot from any [`FederatedWallet`](crate::federated_wallet::FederatedWallet)
+    /// implementation.
+    pub fn from_wallet<S: Signer, W>(
+        wallet: &impl crate::federated_wallet::FederatedWallet<S, W>,
+    ) -> Self {
+        let federations = wallet
+            .federation_wallets()
+            .iter()
+            .map(|fw| FederationSnapshot::from_federation(&fw.federation))
+            .collect();
+        Self {
+            federations,
+            network: wallet.network(),
+            created_at: now_truncated_to_seconds(),
+        }
+    }
+
+    /// Serialize to canonical JSON (sorted keys, no whitespace).
+    pub fn to_canonical_json(&self) -> String {
+        canonical_json(self)
+    }
+
+    /// Pretty JSON for human inspection (NOT canonical).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError::Json`] if serialization fails.
+    pub fn to_pretty_json(&self) -> Result<String, SnapshotError> {
+        serde_json::to_string_pretty(self).map_err(|e| SnapshotError::Json(e.to_string()))
+    }
+
+    /// Deserialize from JSON (any formatting).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError::Json`] if `json` is malformed.
+    pub fn from_json(json: &str) -> Result<Self, SnapshotError> {
+        serde_json::from_str(json).map_err(|e| SnapshotError::Json(e.to_string()))
+    }
+
+    /// Verify internal consistency:
+    ///
+    /// - At least one federation in the stack.
+    /// - Each federation snapshot passes its own [`FederationSnapshot::verify`].
+    /// - All federations share the same network as the top-level `network` field.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError`] on the first failed check.
+    pub fn verify(&self) -> Result<(), SnapshotError> {
+        if self.federations.is_empty() {
+            return Err(SnapshotError::InvalidThreshold(
+                "FederatedWalletSnapshot must contain at least one federation".into(),
+            ));
+        }
+        for (i, fs) in self.federations.iter().enumerate() {
+            fs.verify().map_err(|e| {
+                SnapshotError::Json(format!("federation[{i}] verification failed: {e}"))
+            })?;
+            if fs.network != self.network {
+                return Err(SnapshotError::Json(format!(
+                    "federation[{i}] network {:?} does not match wallet network {:?}",
+                    fs.network, self.network
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,5 +312,92 @@ mod tests {
         snap.signers.pop();
         let err = snap.verify().unwrap_err();
         assert!(matches!(err, SnapshotError::InvalidThreshold(_)));
+    }
+
+    // -----------------------------------------------------------------------
+    // FederatedWalletSnapshot tests
+    // -----------------------------------------------------------------------
+
+    use crate::federated_wallet::BtcFederatedWallet;
+
+    fn make_fed(seeds: &[u64]) -> Federation<MockSigner> {
+        let signers: Vec<MockSigner> = seeds
+            .iter()
+            .map(|&s| MockSigner::with_seed(s, Network::Regtest))
+            .collect();
+        Federation::new(2, signers, Network::Regtest.into()).unwrap()
+    }
+
+    fn make_wallet(federation: &Federation<MockSigner>) -> bdk_wallet::Wallet {
+        let desc = federation.descriptor().to_string();
+        bdk_wallet::Wallet::create_single(desc)
+            .network(Network::Regtest)
+            .create_wallet_no_persist()
+            .expect("valid wallet")
+    }
+
+    #[test]
+    fn federated_wallet_snapshot_round_trip() {
+        let fed1 = make_fed(&[1, 2, 3]);
+        let w1 = make_wallet(&fed1);
+        let fw = BtcFederatedWallet::new(fed1, w1).unwrap();
+
+        let fed2 = make_fed(&[1, 3, 4]);
+        let w2 = make_wallet(&fed2);
+        let fw = fw.with_federation(fed2, w2).unwrap();
+
+        let snap = FederatedWalletSnapshot::from_wallet(&fw);
+        assert_eq!(snap.federations.len(), 2);
+        assert_eq!(snap.network, NetworkType::Bitcoin(Network::Regtest));
+
+        let json = snap.to_canonical_json();
+        let parsed = FederatedWalletSnapshot::from_json(&json).unwrap();
+        let json2 = parsed.to_canonical_json();
+        assert_eq!(json, json2);
+    }
+
+    #[test]
+    fn federated_wallet_snapshot_pretty_json_parses_back() {
+        let fed1 = make_fed(&[1, 2, 3]);
+        let w1 = make_wallet(&fed1);
+        let fw = BtcFederatedWallet::new(fed1, w1).unwrap();
+
+        let snap = FederatedWalletSnapshot::from_wallet(&fw);
+        let pretty = snap.to_pretty_json().unwrap();
+        let parsed = FederatedWalletSnapshot::from_json(&pretty).unwrap();
+        assert_eq!(snap, parsed);
+    }
+
+    #[test]
+    fn federated_wallet_snapshot_verify_passes() {
+        let fed1 = make_fed(&[1, 2, 3]);
+        let w1 = make_wallet(&fed1);
+        let fw = BtcFederatedWallet::new(fed1, w1).unwrap();
+
+        let snap = FederatedWalletSnapshot::from_wallet(&fw);
+        snap.verify().unwrap();
+    }
+
+    #[test]
+    fn federated_wallet_snapshot_verify_rejects_empty() {
+        let snap = FederatedWalletSnapshot {
+            federations: vec![],
+            network: NetworkType::Bitcoin(Network::Regtest),
+            created_at: now_truncated_to_seconds(),
+        };
+        let err = snap.verify().unwrap_err();
+        assert!(matches!(err, SnapshotError::InvalidThreshold(_)));
+    }
+
+    #[test]
+    fn federated_wallet_snapshot_verify_rejects_network_mismatch() {
+        let fed1 = make_fed(&[1, 2, 3]);
+        let w1 = make_wallet(&fed1);
+        let fw = BtcFederatedWallet::new(fed1, w1).unwrap();
+
+        let mut snap = FederatedWalletSnapshot::from_wallet(&fw);
+        snap.network = NetworkType::Bitcoin(Network::Testnet);
+        let err = snap.verify().unwrap_err();
+        assert!(matches!(err, SnapshotError::Json(_)));
     }
 }
