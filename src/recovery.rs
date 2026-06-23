@@ -487,8 +487,7 @@ pub(crate) fn now_truncated_to_seconds() -> SystemTime {
     let now = SystemTime::now();
     let secs = now
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     UNIX_EPOCH + Duration::from_secs(secs)
 }
 

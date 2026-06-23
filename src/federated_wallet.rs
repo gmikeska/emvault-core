@@ -230,6 +230,10 @@ impl BtcFederatedWallet<Box<dyn Signer>> {
     ///
     /// Returns the first [`MigrationError`] encountered from the sweep
     /// algorithm.
+    ///
+    /// # Panics
+    ///
+    /// Cannot panic — `BtcFederatedWallet` always has at least one federation.
     pub fn plan_migrations(
         &self,
         sweep: &dyn SweepAlgorithm<LocalOutput, UnsignedPsbt>,
@@ -300,7 +304,7 @@ impl<S: Signer> FederatedWallet<S, Arc<bdk_wallet::Wallet>> for BtcFederatedWall
     fn all_signer_ids(&self) -> HashSet<SignerId> {
         self.federation_wallets
             .iter()
-            .flat_map(|fw| fw.federation.signers().iter().map(|s| s.id()))
+            .flat_map(|fw| fw.federation.signers().iter().map(super::signer::Signer::id))
             .collect()
     }
 
@@ -309,7 +313,7 @@ impl<S: Signer> FederatedWallet<S, Arc<bdk_wallet::Wallet>> for BtcFederatedWall
             .federation
             .signers()
             .iter()
-            .map(|s| s.id())
+            .map(super::signer::Signer::id)
             .collect()
     }
 }
