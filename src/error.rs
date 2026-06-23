@@ -4,6 +4,8 @@
 //! callers can use [`AsterismError`] which `From`-converts every subsystem
 //! error.
 
+use bitcoin::Amount;
+
 use crate::network::NetworkType;
 use crate::signer::SignerId;
 
@@ -295,4 +297,15 @@ pub enum MigrationError {
     /// Configuration invalid (e.g. `BatchedSweep` with batch size 0).
     #[error("invalid migration configuration: {0}")]
     InvalidConfig(String),
+    /// The designated fee account does not have enough balance to cover the
+    /// estimated migration fees.
+    #[error("fee account (index {fee_account_idx}) balance {available} is insufficient to cover estimated fees {required}")]
+    InsufficientFeeBalance {
+        /// The account index designated as the fee payer.
+        fee_account_idx: u32,
+        /// Balance available in the fee account.
+        available: Amount,
+        /// Estimated total fees required.
+        required: Amount,
+    },
 }

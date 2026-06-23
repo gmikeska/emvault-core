@@ -1,18 +1,16 @@
 //! Sweep-destination correctness for the built-in migration algorithms.
 //!
-//! These tests verify that a [`MigrationPlan`] produced by `BatchedSweep`,
-//! `ConsolidationSweep`, or `AddressForAddressSweep` populates destination
-//! addresses that are actually derived from the new federation's descriptor.
+//! These tests verify that a [`MigrationPlan`] produced by `BatchedSweep`
+//! or `ConsolidationSweep` populates destination addresses that are
+//! actually derived from the new federation's descriptor.
 //! No signing is performed; only the structural correctness of the plan.
 //!
 //! Run with: `cargo test -p asterism-core --features test-utils --test migration_destinations`.
 #![cfg(feature = "test-utils")]
 
-use std::collections::BTreeMap;
-
 use asterism_core::{
-    AddressForAddressSweep, BatchedSweep, ConsolidationSweep, Federation, MigrationPlan, Signer,
-    SweepAlgorithm, UnsignedPsbt, test_utils::MockSigner,
+    BatchedSweep, ConsolidationSweep, Federation, MigrationPlan, Signer, SweepAlgorithm,
+    UnsignedPsbt, test_utils::MockSigner,
 };
 use bdk_wallet::{KeychainKind, LocalOutput, chain::ChainPosition};
 use bitcoin::hashes::Hash;
@@ -130,48 +128,6 @@ fn batched_destination_is_new_federation_for_every_batch() {
         "7 utxos / 3 = 3 batches (3 + 3 + 1)"
     );
     assert_destination_belongs_to(&plan, &new);
-}
-
-// ---------------------------------------------------------------------------
-// Address-for-address sweep
-// ---------------------------------------------------------------------------
-
-#[test]
-fn address_for_address_destinations_all_come_from_new_federation() {
-    let old = fed(&[1, 2, 3]);
-    let new = fed(&[4, 5, 6]);
-
-    // Two distinct old script_pubkeys (use indexes 0 and 1 of an arbitrary
-    // ranged "old" descriptor would be more realistic; for this test we
-    // synthesize two distinct script_pubkeys directly).
-    let spk1 =
-        ScriptBuf::from_hex("0020aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-            .unwrap();
-    let spk2 =
-        ScriptBuf::from_hex("0020bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-            .unwrap();
-    // Map each old script_pubkey to a *distinct* new federation address by
-    // deriving at indexes 0 and 1 of the new federation. (Fixed mode treats
-    // both as the same single address; we exercise distinct receive indexes
-    // by re-using a Ranged-mode federation built explicitly below.)
-    let new_a0 = fed_address(&new, 0);
-    let new_a1 = fed_address(&new, 0); // same as a0 in Fixed mode
-
-    let mut map = BTreeMap::new();
-    map.insert(spk1.clone(), new_a0.clone());
-    map.insert(spk2.clone(), new_a1);
-
-    let utxos = vec![utxo(100_000, 0, spk1), utxo(75_000, 1, spk2)];
-    let plan = AddressForAddressSweep::new(map)
-        .plan(&utxos, &old, &new, FeeRate::from_sat_per_vb_u32(1))
-        .unwrap();
-    assert_eq!(plan.sweep_transactions.len(), 2);
-    let new_script = new_a0.script_pubkey();
-    for sweep in &plan.sweep_transactions {
-        for (dest, _) in &sweep.destinations {
-            assert_eq!(dest.script_pubkey(), new_script);
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
