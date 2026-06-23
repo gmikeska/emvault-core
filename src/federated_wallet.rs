@@ -193,11 +193,7 @@ impl<S: Signer> BtcFederatedWallet<S> {
     pub fn all_utxos(&self) -> Vec<(usize, LocalOutput)> {
         self.federation_wallets
             .iter()
-            .flat_map(|fw| {
-                fw.wallet
-                    .list_unspent()
-                    .map(move |utxo| (fw.index, utxo))
-            })
+            .flat_map(|fw| fw.wallet.list_unspent().map(move |utxo| (fw.index, utxo)))
             .collect()
     }
 
@@ -217,11 +213,8 @@ impl<S: Signer> BtcFederatedWallet<S> {
 
     /// Iterate all wallet instances (for sync fan-out by the application).
     pub fn wallets(&self) -> impl Iterator<Item = &bdk_wallet::Wallet> {
-        self.federation_wallets
-            .iter()
-            .map(|fw| fw.wallet.as_ref())
+        self.federation_wallets.iter().map(|fw| fw.wallet.as_ref())
     }
-
 }
 
 impl BtcFederatedWallet<Box<dyn Signer>> {
@@ -255,12 +248,7 @@ impl BtcFederatedWallet<Box<dyn Signer>> {
             if utxos.is_empty() {
                 continue;
             }
-            let plan = sweep.plan(
-                &utxos,
-                &fw.federation,
-                &current.federation,
-                fee_rate,
-            )?;
+            let plan = sweep.plan(&utxos, &fw.federation, &current.federation, fee_rate)?;
             plans.push((fw.index, plan));
         }
         Ok(plans)
@@ -381,7 +369,8 @@ mod tests {
         let s4 = MockSigner::with_seed(4, Network::Regtest);
         let id2 = s2.id();
 
-        let fed1 = Federation::new(2, vec![s1.clone(), s2, s3.clone()], Network::Regtest.into()).unwrap();
+        let fed1 =
+            Federation::new(2, vec![s1.clone(), s2, s3.clone()], Network::Regtest.into()).unwrap();
         let w1 = make_wallet(&fed1);
         let fw = BtcFederatedWallet::new(fed1, w1).unwrap();
 
@@ -468,7 +457,8 @@ mod tests {
         let s4 = MockSigner::with_seed(4, Network::Regtest);
         let id2 = s2.id();
 
-        let fed1 = Federation::new(2, vec![s1.clone(), s2, s3.clone()], Network::Regtest.into()).unwrap();
+        let fed1 =
+            Federation::new(2, vec![s1.clone(), s2, s3.clone()], Network::Regtest.into()).unwrap();
         let w1 = make_wallet(&fed1);
         let fw = BtcFederatedWallet::new(fed1, w1).unwrap();
 
@@ -488,7 +478,8 @@ mod tests {
         let s4 = MockSigner::with_seed(4, Network::Regtest);
         let id2 = s2.id();
 
-        let fed1 = Federation::new(2, vec![s1.clone(), s2, s3.clone()], Network::Regtest.into()).unwrap();
+        let fed1 =
+            Federation::new(2, vec![s1.clone(), s2, s3.clone()], Network::Regtest.into()).unwrap();
         let w1 = make_wallet(&fed1);
         let fw = BtcFederatedWallet::new(fed1, w1).unwrap();
 
