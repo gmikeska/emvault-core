@@ -97,7 +97,7 @@ fn consolidation_destination_comes_from_new_federation() {
     ];
 
     let plan = ConsolidationSweep::new(new_addr)
-        .plan(&utxos, &old, &new, FeeRate::from_sat_per_vb_u32(2))
+        .plan(&utxos, old.network(), new.network(), FeeRate::from_sat_per_vb_u32(2))
         .unwrap();
     assert_eq!(plan.sweep_transactions.len(), 1);
     assert_eq!(plan.utxo_count, 3);
@@ -120,7 +120,7 @@ fn batched_destination_is_new_federation_for_every_batch() {
         .collect();
 
     let plan = BatchedSweep::new(3, new_addr)
-        .plan(&utxos, &old, &new, FeeRate::from_sat_per_vb_u32(1))
+        .plan(&utxos, old.network(), new.network(), FeeRate::from_sat_per_vb_u32(1))
         .unwrap();
     assert_eq!(
         plan.sweep_transactions.len(),
