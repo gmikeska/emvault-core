@@ -304,7 +304,12 @@ impl<S: Signer> FederatedWallet<S, Arc<bdk_wallet::Wallet>> for BtcFederatedWall
     fn all_signer_ids(&self) -> HashSet<SignerId> {
         self.federation_wallets
             .iter()
-            .flat_map(|fw| fw.federation.signers().iter().map(super::signer::Signer::id))
+            .flat_map(|fw| {
+                fw.federation
+                    .signers()
+                    .iter()
+                    .map(super::signer::Signer::id)
+            })
             .collect()
     }
 
