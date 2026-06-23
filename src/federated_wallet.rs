@@ -252,7 +252,12 @@ impl BtcFederatedWallet<Box<dyn Signer>> {
             if utxos.is_empty() {
                 continue;
             }
-            let plan = sweep.plan(&utxos, fw.federation.network(), current.federation.network(), fee_rate)?;
+            let plan = sweep.plan(
+                &utxos,
+                fw.federation.network(),
+                current.federation.network(),
+                fee_rate,
+            )?;
             plans.push((fw.index, plan));
         }
         Ok(plans)

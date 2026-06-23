@@ -284,8 +284,7 @@ impl SweepAlgorithm<AccountUtxoSet, UnsignedPsbt> for AccountForAccountSweep {
     ) -> Result<MigrationPlan<UnsignedPsbt>, MigrationError> {
         ensure_same_network(old_network, new_network)?;
 
-        let funded: Vec<&AccountUtxoSet> =
-            utxos.iter().filter(|a| !a.utxos.is_empty()).collect();
+        let funded: Vec<&AccountUtxoSet> = utxos.iter().filter(|a| !a.utxos.is_empty()).collect();
         if funded.is_empty() {
             return Err(MigrationError::NoUtxos);
         }
@@ -380,8 +379,7 @@ impl AccountForAccountBatchedSweep {
             let acct_inputs = acct.utxos.len();
             let tx_fee = estimate_fee(acct_inputs + 1, 2, fee_rate);
 
-            let mut source: Vec<OutPoint> =
-                acct.utxos.iter().map(|u| u.outpoint).collect();
+            let mut source: Vec<OutPoint> = acct.utxos.iter().map(|u| u.outpoint).collect();
             if tx_idx == 0 {
                 source.push(fee_utxos[0]);
             } else {
@@ -467,8 +465,7 @@ impl SweepAlgorithm<AccountUtxoSet, UnsignedPsbt> for AccountForAccountBatchedSw
     ) -> Result<MigrationPlan<UnsignedPsbt>, MigrationError> {
         ensure_same_network(old_network, new_network)?;
 
-        let funded: Vec<&AccountUtxoSet> =
-            utxos.iter().filter(|a| !a.utxos.is_empty()).collect();
+        let funded: Vec<&AccountUtxoSet> = utxos.iter().filter(|a| !a.utxos.is_empty()).collect();
         if funded.is_empty() {
             return Err(MigrationError::NoUtxos);
         }
@@ -497,9 +494,8 @@ impl SweepAlgorithm<AccountUtxoSet, UnsignedPsbt> for AccountForAccountBatchedSw
             .partition(|a| a.total_value() >= self.small_account_threshold);
 
         // Pre-flight: estimate total fees across all planned transactions.
-        let planned_fees = batched_estimate_total_fees(
-            &large, &small, fee_account.utxos.len(), fee_rate,
-        );
+        let planned_fees =
+            batched_estimate_total_fees(&large, &small, fee_account.utxos.len(), fee_rate);
 
         if fee_account_total < planned_fees {
             return Err(MigrationError::InsufficientFeeBalance {
@@ -509,8 +505,7 @@ impl SweepAlgorithm<AccountUtxoSet, UnsignedPsbt> for AccountForAccountBatchedSw
             });
         }
 
-        let fee_utxos: Vec<OutPoint> =
-            fee_account.utxos.iter().map(|u| u.outpoint).collect();
+        let fee_utxos: Vec<OutPoint> = fee_account.utxos.iter().map(|u| u.outpoint).collect();
 
         let mut state = BatchedPlanState {
             sweep_transactions: Vec::new(),
@@ -519,14 +514,22 @@ impl SweepAlgorithm<AccountUtxoSet, UnsignedPsbt> for AccountForAccountBatchedSw
         };
 
         Self::plan_large_accounts(
-            &mut state, &large, &fee_utxos,
-            initial_fee_utxo_value, &fee_account_dest, fee_rate,
+            &mut state,
+            &large,
+            &fee_utxos,
+            initial_fee_utxo_value,
+            &fee_account_dest,
+            fee_rate,
         );
 
         if !small.is_empty() {
             Self::plan_small_bundle(
-                &mut state, &small, &fee_utxos,
-                initial_fee_utxo_value, &fee_account_dest, fee_rate,
+                &mut state,
+                &small,
+                &fee_utxos,
+                initial_fee_utxo_value,
+                &fee_account_dest,
+                fee_rate,
                 large.len(),
             );
         }
@@ -571,8 +574,7 @@ fn batched_estimate_total_fees(
         total += estimate_fee(acct.utxos.len() + 1, 2, fee_rate);
     }
     if !small.is_empty() {
-        let small_input_count: usize =
-            small.iter().map(|a| a.utxos.len()).sum::<usize>() + 1;
+        let small_input_count: usize = small.iter().map(|a| a.utxos.len()).sum::<usize>() + 1;
         total += estimate_fee(small_input_count, small.len() + 1, fee_rate);
     }
     total += estimate_fee(fee_account_utxo_count, 1, fee_rate);
@@ -743,7 +745,7 @@ mod tests {
     fn account_for_account_single_tx() {
         let (old, new) = (TESTNET, TESTNET);
         let accounts = vec![
-            account_set(0, &[500_000]),       // fee account
+            account_set(0, &[500_000]), // fee account
             account_set(1, &[100_000]),
             account_set(2, &[200_000]),
             account_set(3, &[300_000, 50_000]),
@@ -781,10 +783,7 @@ mod tests {
 
         // Total output value + fees = total input value.
         let total_output: Amount = tx.destinations.iter().map(|(_, v)| *v).sum();
-        assert_eq!(
-            total_output + plan.total_fees,
-            Amount::from_sat(800_000)
-        );
+        assert_eq!(total_output + plan.total_fees, Amount::from_sat(800_000));
     }
 
     #[test]
@@ -809,10 +808,7 @@ mod tests {
     #[test]
     fn account_for_account_rejects_missing_fee_account() {
         let (old, new) = (TESTNET, TESTNET);
-        let accounts = vec![
-            account_set(1, &[100_000]),
-            account_set(2, &[200_000]),
-        ];
+        let accounts = vec![account_set(1, &[100_000]), account_set(2, &[200_000])];
         let alg = AccountForAccountSweep::new(99);
         let err = alg.plan(&accounts, old, new, rate()).unwrap_err();
         assert!(matches!(err, MigrationError::InvalidConfig(_)));
@@ -829,19 +825,14 @@ mod tests {
         ];
         let alg = AccountForAccountSweep::new(0);
         let err = alg.plan(&accounts, old, new, rate()).unwrap_err();
-        assert!(matches!(
-            err,
-            MigrationError::InsufficientFeeBalance { .. }
-        ));
+        assert!(matches!(err, MigrationError::InsufficientFeeBalance { .. }));
     }
 
     #[test]
     fn account_for_account_rejects_empty_input() {
         let (old, new) = (TESTNET, TESTNET);
         let alg = AccountForAccountSweep::new(0);
-        let err = alg
-            .plan(&[], old, new, rate())
-            .unwrap_err();
+        let err = alg.plan(&[], old, new, rate()).unwrap_err();
         assert!(matches!(err, MigrationError::NoUtxos));
     }
 
@@ -854,11 +845,11 @@ mod tests {
         let (old, new) = (TESTNET, TESTNET);
         let threshold = Amount::from_sat(100_000);
         let accounts = vec![
-            account_set(0, &[1_000_000]),         // fee account (large)
-            account_set(1, &[200_000]),            // large
-            account_set(2, &[150_000]),            // large
-            account_set(3, &[50_000]),             // small
-            account_set(4, &[30_000]),             // small
+            account_set(0, &[1_000_000]), // fee account (large)
+            account_set(1, &[200_000]),   // large
+            account_set(2, &[150_000]),   // large
+            account_set(3, &[50_000]),    // small
+            account_set(4, &[30_000]),    // small
         ];
         let alg = AccountForAccountBatchedSweep::new(0, threshold);
         let plan = alg.plan(&accounts, old, new, rate()).unwrap();
@@ -872,7 +863,7 @@ mod tests {
         let (old, new) = (TESTNET, TESTNET);
         let threshold = Amount::from_sat(10_000);
         let accounts = vec![
-            account_set(0, &[1_000_000]),         // fee
+            account_set(0, &[1_000_000]), // fee
             account_set(1, &[200_000]),
             account_set(2, &[150_000]),
         ];
@@ -888,7 +879,7 @@ mod tests {
         let (old, new) = (TESTNET, TESTNET);
         let threshold = Amount::from_sat(1_000_000);
         let accounts = vec![
-            account_set(0, &[5_000_000]),         // fee
+            account_set(0, &[5_000_000]), // fee
             account_set(1, &[50_000]),
             account_set(2, &[30_000]),
             account_set(3, &[20_000]),
@@ -954,19 +945,14 @@ mod tests {
         ];
         let alg = AccountForAccountBatchedSweep::new(0, Amount::from_sat(100_000));
         let err = alg.plan(&accounts, old, new, rate()).unwrap_err();
-        assert!(matches!(
-            err,
-            MigrationError::InsufficientFeeBalance { .. }
-        ));
+        assert!(matches!(err, MigrationError::InsufficientFeeBalance { .. }));
     }
 
     #[test]
     fn batched_account_rejects_empty_input() {
         let (old, new) = (TESTNET, TESTNET);
         let alg = AccountForAccountBatchedSweep::new(0, Amount::from_sat(100_000));
-        let err = alg
-            .plan(&[], old, new, rate())
-            .unwrap_err();
+        let err = alg.plan(&[], old, new, rate()).unwrap_err();
         assert!(matches!(err, MigrationError::NoUtxos));
     }
 

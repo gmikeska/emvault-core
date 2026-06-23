@@ -299,7 +299,9 @@ pub enum MigrationError {
     InvalidConfig(String),
     /// The designated fee account does not have enough balance to cover the
     /// estimated migration fees.
-    #[error("fee account (index {fee_account_idx}) balance {available} is insufficient to cover estimated fees {required}")]
+    #[error(
+        "fee account (index {fee_account_idx}) balance {available} is insufficient to cover estimated fees {required}"
+    )]
     InsufficientFeeBalance {
         /// The account index designated as the fee payer.
         fee_account_idx: u32,
