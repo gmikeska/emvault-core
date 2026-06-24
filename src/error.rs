@@ -294,7 +294,7 @@ pub enum MigrationError {
         /// New federation's network.
         new: NetworkType,
     },
-    /// Configuration invalid (e.g. `BatchedSweep` with batch size 0).
+    /// Configuration invalid (e.g. missing fee account index).
     #[error("invalid migration configuration: {0}")]
     InvalidConfig(String),
     /// The designated fee account does not have enough balance to cover the

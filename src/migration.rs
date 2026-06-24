@@ -5,11 +5,6 @@
 //!
 //! - The [`SweepAlgorithm`] trait, generic over the UTXO and PSBT types so
 //!   future Elements / Liquid implementations slot in cleanly.
-//! - Single-account algorithms:
-//!   - [`ConsolidationSweep`] — collects all UTXOs into a single output at
-//!     the new federation's first receive address.
-//!   - [`BatchedSweep`] — splits the migration into multiple transactions
-//!     bounded by `max_inputs_per_tx`.
 //! - Multi-account algorithms (operate across all BIP-48 account indices):
 //!   - [`AccountForAccountSweep`] — sweeps all accounts in a single
 //!     transaction. Fees paid by a designated internal account.
@@ -110,123 +105,6 @@ where
         new_network: NetworkType,
         fee_rate: FeeRate,
     ) -> Result<MigrationPlan<P>, MigrationError>;
-}
-
-// ---------------------------------------------------------------------------
-// Built-in algorithms (Bitcoin)
-// ---------------------------------------------------------------------------
-
-/// Sweeps every UTXO into a single output at `destination_address`.
-///
-/// The destination address is supplied at construction time (typically the
-/// new federation's first receive address, derived via
-/// [`bdk_wallet::Wallet::reveal_next_address`] before invoking the
-/// migration).
-pub struct ConsolidationSweep {
-    destination_address: Address,
-}
-
-impl ConsolidationSweep {
-    /// Construct with the new federation's destination address.
-    pub fn new(destination_address: Address) -> Self {
-        Self {
-            destination_address,
-        }
-    }
-}
-
-impl SweepAlgorithm<LocalOutput, UnsignedPsbt> for ConsolidationSweep {
-    fn plan(
-        &self,
-        utxos: &[LocalOutput],
-        old_network: NetworkType,
-        new_network: NetworkType,
-        fee_rate: FeeRate,
-    ) -> Result<MigrationPlan<UnsignedPsbt>, MigrationError> {
-        ensure_same_network(old_network, new_network)?;
-        if utxos.is_empty() {
-            return Err(MigrationError::NoUtxos);
-        }
-        let total_value: Amount = utxos
-            .iter()
-            .map(|u| u.txout.value)
-            .fold(Amount::ZERO, |a, b| a + b);
-        let fee = estimate_fee(utxos.len(), 1, fee_rate);
-        let net = total_value.checked_sub(fee).ok_or_else(|| {
-            MigrationError::SweepFailed(format!("fee {fee} exceeds total UTXO value {total_value}"))
-        })?;
-        Ok(MigrationPlan {
-            sweep_transactions: vec![SweepTransaction {
-                source_utxos: utxos.iter().map(|u| u.outpoint).collect(),
-                destinations: vec![(self.destination_address.clone(), net)],
-                psbt: None,
-            }],
-            total_fees: fee,
-            utxo_count: utxos.len(),
-        })
-    }
-}
-
-/// Splits the migration into batches of at most `max_inputs_per_tx` UTXOs,
-/// each consolidated to `destination_address`.
-pub struct BatchedSweep {
-    /// Maximum inputs per individual sweep transaction. Must be >= 1.
-    pub max_inputs_per_tx: usize,
-    /// Destination for every batch.
-    pub destination_address: Address,
-}
-
-impl BatchedSweep {
-    /// Construct with explicit batch size.
-    pub fn new(max_inputs_per_tx: usize, destination_address: Address) -> Self {
-        Self {
-            max_inputs_per_tx,
-            destination_address,
-        }
-    }
-}
-
-impl SweepAlgorithm<LocalOutput, UnsignedPsbt> for BatchedSweep {
-    fn plan(
-        &self,
-        utxos: &[LocalOutput],
-        old_network: NetworkType,
-        new_network: NetworkType,
-        fee_rate: FeeRate,
-    ) -> Result<MigrationPlan<UnsignedPsbt>, MigrationError> {
-        ensure_same_network(old_network, new_network)?;
-        if self.max_inputs_per_tx == 0 {
-            return Err(MigrationError::InvalidConfig(
-                "max_inputs_per_tx must be at least 1".into(),
-            ));
-        }
-        if utxos.is_empty() {
-            return Err(MigrationError::NoUtxos);
-        }
-        let mut sweep_transactions = Vec::new();
-        let mut total_fees = Amount::ZERO;
-        for chunk in utxos.chunks(self.max_inputs_per_tx) {
-            let value: Amount = chunk
-                .iter()
-                .map(|u| u.txout.value)
-                .fold(Amount::ZERO, |a, b| a + b);
-            let fee = estimate_fee(chunk.len(), 1, fee_rate);
-            total_fees += fee;
-            let net = value.checked_sub(fee).ok_or_else(|| {
-                MigrationError::SweepFailed(format!("fee {fee} exceeds chunk value {value}"))
-            })?;
-            sweep_transactions.push(SweepTransaction {
-                source_utxos: chunk.iter().map(|u| u.outpoint).collect(),
-                destinations: vec![(self.destination_address.clone(), net)],
-                psbt: None,
-            });
-        }
-        Ok(MigrationPlan {
-            sweep_transactions,
-            total_fees,
-            utxo_count: utxos.len(),
-        })
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -661,57 +539,6 @@ mod tests {
                 last_seen: None,
             },
         }
-    }
-
-    #[test]
-    fn consolidation_produces_single_tx() {
-        let (old, new) = (TESTNET, TESTNET);
-        let utxos = vec![dummy_utxo(100_000, 0), dummy_utxo(200_000, 1)];
-        let alg = ConsolidationSweep::new(dummy_address());
-        let plan = alg
-            .plan(&utxos, old, new, FeeRate::from_sat_per_vb_u32(2))
-            .unwrap();
-        assert_eq!(plan.sweep_transactions.len(), 1);
-        assert_eq!(plan.utxo_count, 2);
-        assert_eq!(plan.sweep_transactions[0].source_utxos.len(), 2);
-        assert_eq!(plan.sweep_transactions[0].destinations.len(), 1);
-    }
-
-    #[test]
-    fn batched_respects_max_inputs() {
-        let (old, new) = (TESTNET, TESTNET);
-        let utxos: Vec<_> = (0..10).map(|i| dummy_utxo(50_000, i)).collect();
-        let alg = BatchedSweep::new(3, dummy_address());
-        let plan = alg
-            .plan(&utxos, old, new, FeeRate::from_sat_per_vb_u32(1))
-            .unwrap();
-        assert_eq!(plan.sweep_transactions.len(), 4); // 3+3+3+1
-        assert_eq!(plan.utxo_count, 10);
-    }
-
-    #[test]
-    fn batched_rejects_zero_batch_size() {
-        let (old, new) = (TESTNET, TESTNET);
-        let alg = BatchedSweep::new(0, dummy_address());
-        let err = alg
-            .plan(
-                &[dummy_utxo(1000, 0)],
-                old,
-                new,
-                FeeRate::from_sat_per_vb_u32(1),
-            )
-            .unwrap_err();
-        assert!(matches!(err, MigrationError::InvalidConfig(_)));
-    }
-
-    #[test]
-    fn empty_utxos_rejected() {
-        let (old, new) = (TESTNET, TESTNET);
-        let alg = ConsolidationSweep::new(dummy_address());
-        let err = alg
-            .plan(&[], old, new, FeeRate::from_sat_per_vb_u32(1))
-            .unwrap_err();
-        assert!(matches!(err, MigrationError::NoUtxos));
     }
 
     // -----------------------------------------------------------------------

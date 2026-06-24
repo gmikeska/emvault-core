@@ -110,8 +110,8 @@ pub use error::{
 pub use federated_wallet::{BtcFederatedWallet, FederatedWallet, FederationWallet};
 pub use federation::Federation;
 pub use migration::{
-    AccountForAccountBatchedSweep, AccountForAccountSweep, AccountUtxoSet, BatchedSweep,
-    ConsolidationSweep, FederationMigration, MigrationPlan, SweepAlgorithm, SweepTransaction,
+    AccountForAccountBatchedSweep, AccountForAccountSweep, AccountUtxoSet, FederationMigration,
+    MigrationPlan, SweepAlgorithm, SweepTransaction,
 };
 #[cfg(feature = "elements")]
 pub use network::ElementsNetworkId;
