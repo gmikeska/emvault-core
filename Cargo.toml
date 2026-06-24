@@ -15,6 +15,9 @@ node-tests = []
 # pipeline lives in the `asterism-elements` companion crate; this feature only
 # adds the discriminant variants `asterism-elements` needs to refer to.
 elements = []
+# Integration tests that exercise sweep algorithms with real HSM-backed
+# signers (asterism-pkcs11 + asterism-dev-signer + SoftHSM2).
+hsm-sweep-tests = []
 
 [dependencies]
 bdk_wallet = "3.1.0"
@@ -32,3 +35,6 @@ proptest = "1.11.0"
 rand = "0.10.1"
 ureq = { version = "2.10", features = ["json"] }
 dotenvy = "0.15.7"
+asterism-pkcs11 = { path = "../asterism-pkcs11" }
+asterism-dev-signer = { path = "../asterism-dev-signer" }
+serial_test = "3.5.0"
