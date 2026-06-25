@@ -111,7 +111,7 @@ pub use federated_wallet::{BtcFederatedWallet, FederatedWallet, FederationWallet
 pub use federation::Federation;
 pub use migration::{
     AccountForAccountBatchedSweep, AccountForAccountSweep, AccountUtxoSet, FederationMigration,
-    MigrationPlan, SweepAlgorithm, SweepTransaction,
+    MigrationPlan, SweepAlgorithm, SweepOutput, SweepTransaction,
 };
 #[cfg(feature = "elements")]
 pub use network::ElementsNetworkId;

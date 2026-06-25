@@ -65,19 +65,75 @@ pub struct MigrationPlan<P: std::fmt::Debug> {
     pub utxo_count: usize,
 }
 
+/// A single output within a [`SweepTransaction`].
+///
+/// Customer outputs carry their concrete new-federation address. The
+/// **fee-change** output deliberately carries *no address*: the consumer
+/// resolves it to the fee account's **old**-federation address for intermediate
+/// (chained) transactions and to its **new**-federation address for the final
+/// fee-account transaction ([`SweepTransaction::is_fee_final`]). This keeps the
+/// planner network/address-agnostic — it decides amounts and topology only —
+/// and lets the consumer own which federation the fee change lives at per hop.
+#[derive(Debug, Clone)]
+pub enum SweepOutput {
+    /// A customer account's funds, paid in full to its new-federation address.
+    Customer {
+        /// BIP-48 account index this output belongs to.
+        account_idx: u32,
+        /// The customer's destination address in the new federation.
+        address: Address,
+        /// The exact amount paid (the account's full balance).
+        amount: Amount,
+    },
+    /// The fee account's change/consolidation output. The amount is the drained
+    /// remainder (`fee_input_value - tx_fee`); the address is resolved by the
+    /// consumer per [`SweepTransaction::is_fee_final`].
+    FeeChange {
+        /// The fee account's BIP-48 account index.
+        account_idx: u32,
+        /// The drained remainder routed to the fee account.
+        amount: Amount,
+    },
+}
+
+impl SweepOutput {
+    /// The BIP-48 account index this output belongs to.
+    #[must_use]
+    pub fn account_idx(&self) -> u32 {
+        match self {
+            SweepOutput::Customer { account_idx, .. } | SweepOutput::FeeChange { account_idx, .. } => {
+                *account_idx
+            }
+        }
+    }
+
+    /// The output amount (pre-fee; the fee-change drain absorbs the real fee).
+    #[must_use]
+    pub fn amount(&self) -> Amount {
+        match self {
+            SweepOutput::Customer { amount, .. } | SweepOutput::FeeChange { amount, .. } => *amount,
+        }
+    }
+}
+
 /// A single sweep transaction's shape.
 #[derive(Debug)]
 pub struct SweepTransaction<P: std::fmt::Debug> {
     /// Source UTXO outpoints to spend.
     pub source_utxos: Vec<OutPoint>,
-    /// Output destinations: `(address, amount)`. The `amount` is a
-    /// pre-fee estimate; the consumer's PSBT builder adjusts for actual
-    /// fees.
-    pub destinations: Vec<(Address, Amount)>,
+    /// The transaction's outputs. Amounts are pre-fee estimates; the consumer's
+    /// PSBT builder adjusts for actual fees (the fee-change output absorbs the
+    /// difference via `drain_to`).
+    pub outputs: Vec<SweepOutput>,
+    /// `true` for the final, fee-account-only transaction — the consumer routes
+    /// its [`SweepOutput::FeeChange`] to the **new** federation. Intermediate
+    /// transactions (`false`) route fee change to the fee account's **old**
+    /// federation address so it stays old-fed-signed until this last hop.
+    pub is_fee_final: bool,
     /// The constructed PSBT, if the algorithm provides one.
     ///
     /// v1 built-in algorithms leave this `None`; the consumer builds the
-    /// PSBT via [`bdk_wallet::Wallet::build_tx`] using the destinations
+    /// PSBT via [`bdk_wallet::Wallet::build_tx`] using the outputs
     /// described above.
     pub psbt: Option<P>,
 }
@@ -194,24 +250,33 @@ impl SweepAlgorithm<AccountUtxoSet, UnsignedPsbt> for AccountForAccountSweep {
             .flat_map(|a| a.utxos.iter().map(|u| u.outpoint))
             .collect();
 
-        let destinations: Vec<(Address, Amount)> = funded
+        let outputs: Vec<SweepOutput> = funded
             .iter()
             .map(|a| {
-                let value = if a.account_idx == self.fee_account_idx {
-                    a.total_value() - fee
+                if a.account_idx == self.fee_account_idx {
+                    SweepOutput::FeeChange {
+                        account_idx: a.account_idx,
+                        amount: a.total_value() - fee,
+                    }
                 } else {
-                    a.total_value()
-                };
-                (a.destination_address.clone(), value)
+                    SweepOutput::Customer {
+                        account_idx: a.account_idx,
+                        address: a.destination_address.clone(),
+                        amount: a.total_value(),
+                    }
+                }
             })
             .collect();
 
         Ok(MigrationPlan {
             utxo_count: total_inputs,
             total_fees: fee,
+            // Single transaction: the fee account migrates in this same tx, so
+            // its fee-change output resolves to the new federation.
             sweep_transactions: vec![SweepTransaction {
                 source_utxos,
-                destinations,
+                outputs,
+                is_fee_final: true,
                 psbt: None,
             }],
         })
@@ -250,7 +315,7 @@ impl AccountForAccountBatchedSweep {
         large: &[&AccountUtxoSet],
         fee_utxos: &[OutPoint],
         initial_fee_utxo_value: Amount,
-        fee_account_dest: &Address,
+        fee_account_idx: u32,
         fee_rate: FeeRate,
     ) {
         for (tx_idx, acct) in large.iter().enumerate() {
@@ -272,15 +337,23 @@ impl AccountForAccountBatchedSweep {
 
             state.cumulative_fee += tx_fee;
 
-            let destinations = vec![
-                (acct.destination_address.clone(), acct.total_value()),
-                (fee_account_dest.clone(), fee_input_value - tx_fee),
+            let outputs = vec![
+                SweepOutput::Customer {
+                    account_idx: acct.account_idx,
+                    address: acct.destination_address.clone(),
+                    amount: acct.total_value(),
+                },
+                SweepOutput::FeeChange {
+                    account_idx: fee_account_idx,
+                    amount: fee_input_value - tx_fee,
+                },
             ];
 
             state.total_utxo_count += acct_inputs + 1;
             state.sweep_transactions.push(SweepTransaction {
                 source_utxos: source,
-                destinations,
+                outputs,
+                is_fee_final: false,
                 psbt: None,
             });
         }
@@ -292,7 +365,7 @@ impl AccountForAccountBatchedSweep {
         small: &[&AccountUtxoSet],
         fee_utxos: &[OutPoint],
         initial_fee_utxo_value: Amount,
-        fee_account_dest: &Address,
+        fee_account_idx: u32,
         fee_rate: FeeRate,
         preceding_tx_count: usize,
     ) {
@@ -318,16 +391,24 @@ impl AccountForAccountBatchedSweep {
 
         state.cumulative_fee += tx_fee;
 
-        let mut destinations: Vec<(Address, Amount)> = small
+        let mut outputs: Vec<SweepOutput> = small
             .iter()
-            .map(|a| (a.destination_address.clone(), a.total_value()))
+            .map(|a| SweepOutput::Customer {
+                account_idx: a.account_idx,
+                address: a.destination_address.clone(),
+                amount: a.total_value(),
+            })
             .collect();
-        destinations.push((fee_account_dest.clone(), fee_input_value - tx_fee));
+        outputs.push(SweepOutput::FeeChange {
+            account_idx: fee_account_idx,
+            amount: fee_input_value - tx_fee,
+        });
 
         state.total_utxo_count += small_inputs + 1;
         state.sweep_transactions.push(SweepTransaction {
             source_utxos: source,
-            destinations,
+            outputs,
+            is_fee_final: false,
             psbt: None,
         });
     }
@@ -357,7 +438,6 @@ impl SweepAlgorithm<AccountUtxoSet, UnsignedPsbt> for AccountForAccountBatchedSw
                     self.fee_account_idx
                 ))
             })?;
-        let fee_account_dest = fee_account.destination_address.clone();
         let fee_account_total = fee_account.total_value();
         let initial_fee_utxo_value = fee_account.utxos[0].txout.value;
 
@@ -396,7 +476,7 @@ impl SweepAlgorithm<AccountUtxoSet, UnsignedPsbt> for AccountForAccountBatchedSw
             &large,
             &fee_utxos,
             initial_fee_utxo_value,
-            &fee_account_dest,
+            self.fee_account_idx,
             fee_rate,
         );
 
@@ -406,7 +486,7 @@ impl SweepAlgorithm<AccountUtxoSet, UnsignedPsbt> for AccountForAccountBatchedSw
                 &small,
                 &fee_utxos,
                 initial_fee_utxo_value,
-                &fee_account_dest,
+                self.fee_account_idx,
                 fee_rate,
                 large.len(),
             );
@@ -429,7 +509,11 @@ impl SweepAlgorithm<AccountUtxoSet, UnsignedPsbt> for AccountForAccountBatchedSw
 
         state.sweep_transactions.push(SweepTransaction {
             source_utxos: fee_source,
-            destinations: vec![(fee_account_dest, fee_account_remaining)],
+            outputs: vec![SweepOutput::FeeChange {
+                account_idx: self.fee_account_idx,
+                amount: fee_account_remaining,
+            }],
+            is_fee_final: true,
             psbt: None,
         });
 
@@ -581,7 +665,8 @@ mod tests {
         let plan = alg.plan(&accounts, old, new, rate()).unwrap();
 
         assert_eq!(plan.sweep_transactions.len(), 1);
-        assert_eq!(plan.sweep_transactions[0].destinations.len(), 4);
+        assert_eq!(plan.sweep_transactions[0].outputs.len(), 4);
+        assert!(plan.sweep_transactions[0].is_fee_final);
     }
 
     #[test]
@@ -596,20 +681,20 @@ mod tests {
         let plan = alg.plan(&accounts, old, new, rate()).unwrap();
 
         let tx = &plan.sweep_transactions[0];
-        // Destinations follow input order: acct 0 (fee), acct 1, acct 2.
-        assert_eq!(tx.destinations.len(), 3);
+        // Outputs follow input order: acct 0 (fee), acct 1, acct 2.
+        assert_eq!(tx.outputs.len(), 3);
 
-        // Fee account (idx 0) gets its value minus the fee.
-        assert_eq!(
-            tx.destinations[0].1,
-            Amount::from_sat(500_000) - plan.total_fees
-        );
+        let amount_of = |idx: u32| tx.outputs.iter().find(|o| o.account_idx() == idx).unwrap().amount();
+        // Fee account (idx 0) is a FeeChange output: its value minus the fee.
+        assert!(matches!(tx.outputs[0], SweepOutput::FeeChange { .. }));
+        assert_eq!(amount_of(0), Amount::from_sat(500_000) - plan.total_fees);
         // Customer accounts receive their exact input value.
-        assert_eq!(tx.destinations[1].1, Amount::from_sat(100_000));
-        assert_eq!(tx.destinations[2].1, Amount::from_sat(200_000));
+        assert!(matches!(tx.outputs[1], SweepOutput::Customer { .. }));
+        assert_eq!(amount_of(1), Amount::from_sat(100_000));
+        assert_eq!(amount_of(2), Amount::from_sat(200_000));
 
         // Total output value + fees = total input value.
-        let total_output: Amount = tx.destinations.iter().map(|(_, v)| *v).sum();
+        let total_output: Amount = tx.outputs.iter().map(SweepOutput::amount).sum();
         assert_eq!(total_output + plan.total_fees, Amount::from_sat(800_000));
     }
 
@@ -629,7 +714,7 @@ mod tests {
         let plan = alg.plan(&accounts, old, new, rate()).unwrap();
 
         // Only 2 funded accounts → 2 outputs.
-        assert_eq!(plan.sweep_transactions[0].destinations.len(), 2);
+        assert_eq!(plan.sweep_transactions[0].outputs.len(), 2);
     }
 
     #[test]
@@ -730,8 +815,23 @@ mod tests {
         let plan = alg.plan(&accounts, old, new, rate()).unwrap();
 
         let last_tx = plan.sweep_transactions.last().unwrap();
-        // The last transaction's single output goes to the fee account.
-        assert_eq!(last_tx.destinations.len(), 1);
+        // The last transaction is the fee-account migration: a single FeeChange
+        // output and `is_fee_final` set.
+        assert_eq!(last_tx.outputs.len(), 1);
+        assert!(last_tx.is_fee_final);
+        assert!(matches!(last_tx.outputs[0], SweepOutput::FeeChange { account_idx: 0, .. }));
+
+        // Every intermediate (non-final) tx carries exactly one FeeChange output
+        // and is not marked final.
+        for tx in &plan.sweep_transactions[..plan.sweep_transactions.len() - 1] {
+            assert!(!tx.is_fee_final);
+            let fee_outs = tx
+                .outputs
+                .iter()
+                .filter(|o| matches!(o, SweepOutput::FeeChange { .. }))
+                .count();
+            assert_eq!(fee_outs, 1, "intermediate tx has exactly one FeeChange output");
+        }
     }
 
     #[test]

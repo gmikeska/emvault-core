@@ -20,6 +20,7 @@ use asterism_core::descriptor::{KeyMode, to_multipath_string};
 use asterism_core::federation::Federation;
 use asterism_core::migration::{
     AccountForAccountBatchedSweep, AccountForAccountSweep, AccountUtxoSet, SweepAlgorithm,
+    SweepOutput,
 };
 use asterism_core::network::NetworkType;
 use asterism_core::signer::{Signer, SignerCapabilities, SignerHealth, SignerId, SignerType};
@@ -128,10 +129,10 @@ impl Signer for PatchedSigner {
 fn pkcs11_lib_path() -> PathBuf {
     let env_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".env");
     let _ = dotenvy::from_path(&env_path);
-    if let Ok(p) = Pkcs11Config::library_path_from_env() {
-        if p.exists() {
-            return p;
-        }
+    if let Ok(p) = Pkcs11Config::library_path_from_env()
+        && p.exists()
+    {
+        return p;
     }
     let fallback = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../libasterism_dev_hsm/target/release/libasterism_dev_hsm.so");
@@ -336,30 +337,32 @@ fn account_for_account_sweep_with_hsm_signers() {
     assert_eq!(tx.source_utxos.len(), 4);
 
     // 3 outputs (one per funded account).
-    assert_eq!(tx.destinations.len(), 3);
+    assert_eq!(tx.outputs.len(), 3);
 
     // Fee account (idx 0) absorbs the fee.
-    let fee_account_output = tx.destinations[0].1;
+    let fee_account_output = tx.outputs[0].amount();
     assert_eq!(
         fee_account_output,
         Amount::from_sat(1_000_000) - plan.total_fees,
     );
 
     // Customer accounts receive exact input value.
-    assert_eq!(tx.destinations[1].1, Amount::from_sat(200_000));
-    assert_eq!(tx.destinations[2].1, Amount::from_sat(450_000));
+    assert_eq!(tx.outputs[1].amount(), Amount::from_sat(200_000));
+    assert_eq!(tx.outputs[2].amount(), Amount::from_sat(450_000));
 
     // Conservation: total output + fees = total input.
-    let total_output: Amount = tx.destinations.iter().map(|(_, v)| *v).sum();
+    let total_output: Amount = tx.outputs.iter().map(SweepOutput::amount).sum();
     assert_eq!(total_output + plan.total_fees, Amount::from_sat(1_650_000),);
 
     // Destinations are real HSM-derived addresses (not dummy).
-    for (addr, _) in &tx.destinations {
-        assert!(
-            addr.to_string().starts_with("bcrt1"),
-            "expected regtest bech32 address, got {}",
-            addr,
-        );
+    for out in &tx.outputs {
+        if let SweepOutput::Customer { address, .. } = out {
+            assert!(
+                address.to_string().starts_with("bcrt1"),
+                "expected regtest bech32 address, got {}",
+                address,
+            );
+        }
     }
 
     // New federation descriptor is well-formed.
@@ -369,7 +372,7 @@ fn account_for_account_sweep_with_hsm_signers() {
     println!(
         "AccountForAccountSweep: plan OK — 1 tx, {} inputs, {} outputs, fee {}",
         tx.source_utxos.len(),
-        tx.destinations.len(),
+        tx.outputs.len(),
         plan.total_fees
     );
 }
@@ -430,7 +433,7 @@ fn account_for_account_batched_sweep_with_hsm_signers() {
     // Last transaction is the fee account (single output).
     let last_tx = plan.sweep_transactions.last().unwrap();
     assert_eq!(
-        last_tx.destinations.len(),
+        last_tx.outputs.len(),
         1,
         "fee account tx should have exactly 1 output",
     );
@@ -438,19 +441,21 @@ fn account_for_account_batched_sweep_with_hsm_signers() {
     // The small bundle should have outputs for both small accounts + fee change.
     let small_bundle = &plan.sweep_transactions[2];
     assert_eq!(
-        small_bundle.destinations.len(),
+        small_bundle.outputs.len(),
         3,
         "small bundle: 2 small account outputs + 1 fee change = 3 outputs",
     );
 
     // All destination addresses are real regtest bech32.
     for tx in &plan.sweep_transactions {
-        for (addr, _) in &tx.destinations {
-            assert!(
-                addr.to_string().starts_with("bcrt1"),
-                "expected regtest bech32 address, got {}",
-                addr,
-            );
+        for out in &tx.outputs {
+            if let SweepOutput::Customer { address, .. } = out {
+                assert!(
+                    address.to_string().starts_with("bcrt1"),
+                    "expected regtest bech32 address, got {}",
+                    address,
+                );
+            }
         }
     }
 
@@ -504,14 +509,14 @@ fn sweep_multi_utxo_fee_account() {
 
     // Fee account absorbs fee; its output = 900k - fees.
     assert_eq!(
-        tx.destinations[0].1,
+        tx.outputs[0].amount(),
         Amount::from_sat(900_000) - plan.total_fees
     );
     // Customers untouched.
-    assert_eq!(tx.destinations[1].1, Amount::from_sat(100_000));
-    assert_eq!(tx.destinations[2].1, Amount::from_sat(250_000));
+    assert_eq!(tx.outputs[1].amount(), Amount::from_sat(100_000));
+    assert_eq!(tx.outputs[2].amount(), Amount::from_sat(250_000));
 
-    let total_out: Amount = tx.destinations.iter().map(|(_, v)| *v).sum();
+    let total_out: Amount = tx.outputs.iter().map(SweepOutput::amount).sum();
     assert_eq!(total_out + plan.total_fees, Amount::from_sat(1_250_000));
 }
 
@@ -544,17 +549,17 @@ fn batched_multi_utxo_fee_account() {
     assert_eq!(plan.sweep_transactions[0].source_utxos.len(), 2);
     // Customer gets exact value.
     assert_eq!(
-        plan.sweep_transactions[0].destinations[0].1,
+        plan.sweep_transactions[0].outputs[0].amount(),
         Amount::from_sat(400_000)
     );
 
     // Fee-last tx: utxo[1] + utxo[2] + synthetic change = 3 inputs.
     let last = plan.sweep_transactions.last().unwrap();
     assert_eq!(last.source_utxos.len(), 3);
-    assert_eq!(last.destinations.len(), 1);
+    assert_eq!(last.outputs.len(), 1);
     // Fee account output = total fee value - all accumulated fees.
     assert_eq!(
-        last.destinations[0].1,
+        last.outputs[0].amount(),
         Amount::from_sat(1_000_000) - plan.total_fees
     );
 }
@@ -587,7 +592,7 @@ fn sweep_fee_barely_covers_fee() {
         .unwrap();
 
     let tx = &plan.sweep_transactions[0];
-    let fee_output = tx.destinations[0].1;
+    let fee_output = tx.outputs[0].amount();
     assert!(
         fee_output > Amount::ZERO,
         "fee account output should be positive"
@@ -596,7 +601,7 @@ fn sweep_fee_barely_covers_fee() {
         fee_output < Amount::from_sat(10),
         "fee account output should be tiny"
     );
-    assert_eq!(tx.destinations[1].1, Amount::from_sat(100_000));
+    assert_eq!(tx.outputs[1].amount(), Amount::from_sat(100_000));
 }
 
 #[test]
@@ -632,12 +637,12 @@ fn batched_threshold_boundary() {
     // The small bundle (tx index 2) should have exactly 1 customer output + 1 fee change.
     let bundle = &plan.sweep_transactions[2];
     assert_eq!(
-        bundle.destinations.len(),
+        bundle.outputs.len(),
         2,
         "small bundle: 1 small account + 1 fee change",
     );
     // The small account gets its exact value.
-    assert_eq!(bundle.destinations[0].1, Amount::from_sat(99_999));
+    assert_eq!(bundle.outputs[0].amount(), Amount::from_sat(99_999));
 }
 
 // =========================================================================
@@ -669,16 +674,17 @@ fn sweep_strict_conservation() {
         .map(|(_, amts)| amts.iter().sum::<u64>())
         .collect();
 
-    for (i, (_, output_val)) in tx.destinations.iter().enumerate() {
+    for (i, output) in tx.outputs.iter().enumerate() {
+        let output_val = output.amount();
         if input_values[i].0 == 0 {
             assert_eq!(
-                *output_val,
+                output_val,
                 Amount::from_sat(expected_totals[i]) - plan.total_fees,
                 "fee account output mismatch",
             );
         } else {
             assert_eq!(
-                *output_val,
+                output_val,
                 Amount::from_sat(expected_totals[i]),
                 "customer account {} output should equal its input",
                 input_values[i].0,
@@ -688,7 +694,7 @@ fn sweep_strict_conservation() {
 
     // Global conservation.
     let total_input: u64 = expected_totals.iter().sum();
-    let total_output: Amount = tx.destinations.iter().map(|(_, v)| *v).sum();
+    let total_output: Amount = tx.outputs.iter().map(SweepOutput::amount).sum();
     assert_eq!(
         total_output + plan.total_fees,
         Amount::from_sat(total_input)
@@ -728,30 +734,30 @@ fn batched_strict_conservation() {
 
     // Large customer txs: each customer gets exact input value.
     assert_eq!(
-        plan.sweep_transactions[0].destinations[0].1,
+        plan.sweep_transactions[0].outputs[0].amount(),
         Amount::from_sat(500_000),
         "large acct 1 should get exact value",
     );
     assert_eq!(
-        plan.sweep_transactions[1].destinations[0].1,
+        plan.sweep_transactions[1].outputs[0].amount(),
         Amount::from_sat(300_000),
         "large acct 2 should get exact value",
     );
 
     // Small bundle: each small account gets exact value.
     let bundle = &plan.sweep_transactions[2];
-    assert_eq!(bundle.destinations[0].1, Amount::from_sat(40_000));
-    assert_eq!(bundle.destinations[1].1, Amount::from_sat(60_000));
+    assert_eq!(bundle.outputs[0].amount(), Amount::from_sat(40_000));
+    assert_eq!(bundle.outputs[1].amount(), Amount::from_sat(60_000));
 
     // Fee account final tx: output = fee_total - total_fees.
     let fee_total = Amount::from_sat(3_000_000);
     let last = plan.sweep_transactions.last().unwrap();
-    assert_eq!(last.destinations[0].1, fee_total - plan.total_fees);
+    assert_eq!(last.outputs[0].amount(), fee_total - plan.total_fees);
 
     // Global: sum of all customer outputs + fee output + total_fees = total input.
     let total_input: u64 = input_values.iter().flat_map(|(_, a)| a.iter()).sum();
     let customer_outputs = Amount::from_sat(500_000 + 300_000 + 40_000 + 60_000);
-    let fee_output = last.destinations[0].1;
+    let fee_output = last.outputs[0].amount();
     assert_eq!(
         customer_outputs + fee_output + plan.total_fees,
         Amount::from_sat(total_input)
@@ -785,9 +791,9 @@ fn sweep_fee_account_only() {
     assert_eq!(plan.sweep_transactions.len(), 1);
     let tx = &plan.sweep_transactions[0];
     assert_eq!(tx.source_utxos.len(), 1);
-    assert_eq!(tx.destinations.len(), 1);
+    assert_eq!(tx.outputs.len(), 1);
     assert_eq!(
-        tx.destinations[0].1,
+        tx.outputs[0].amount(),
         Amount::from_sat(1_000_000) - plan.total_fees,
     );
     assert!(plan.total_fees > Amount::ZERO);
@@ -809,9 +815,9 @@ fn batched_fee_account_only() {
     assert_eq!(plan.sweep_transactions.len(), 1);
     let tx = &plan.sweep_transactions[0];
     assert_eq!(tx.source_utxos.len(), 1);
-    assert_eq!(tx.destinations.len(), 1);
+    assert_eq!(tx.outputs.len(), 1);
     assert_eq!(
-        tx.destinations[0].1,
+        tx.outputs[0].amount(),
         Amount::from_sat(2_000_000) - plan.total_fees,
     );
     // With no intermediate txs, the source should be the original UTXO
@@ -843,15 +849,17 @@ fn sweep_2_of_5_federation() {
 
     assert_eq!(plan.sweep_transactions.len(), 1);
     let tx = &plan.sweep_transactions[0];
-    assert_eq!(tx.destinations.len(), 3);
+    assert_eq!(tx.outputs.len(), 3);
 
     // All addresses valid.
-    for (addr, _) in &tx.destinations {
-        assert!(addr.to_string().starts_with("bcrt1"));
+    for out in &tx.outputs {
+        if let SweepOutput::Customer { address, .. } = out {
+            assert!(address.to_string().starts_with("bcrt1"));
+        }
     }
 
     // Conservation holds.
-    let total_out: Amount = tx.destinations.iter().map(|(_, v)| *v).sum();
+    let total_out: Amount = tx.outputs.iter().map(SweepOutput::amount).sum();
     assert_eq!(total_out + plan.total_fees, Amount::from_sat(1_000_000));
 
     // Verify the 2-of-5 descriptor round-trips.
@@ -891,25 +899,27 @@ fn batched_2_of_3_federation() {
     assert_eq!(plan.sweep_transactions.len(), 3);
 
     for tx in &plan.sweep_transactions {
-        for (addr, _) in &tx.destinations {
-            assert!(addr.to_string().starts_with("bcrt1"));
+        for out in &tx.outputs {
+            if let SweepOutput::Customer { address, .. } = out {
+                assert!(address.to_string().starts_with("bcrt1"));
+            }
         }
     }
 
     // Customer outputs exact.
     assert_eq!(
-        plan.sweep_transactions[0].destinations[0].1,
+        plan.sweep_transactions[0].outputs[0].amount(),
         Amount::from_sat(300_000)
     );
     assert_eq!(
-        plan.sweep_transactions[1].destinations[0].1,
+        plan.sweep_transactions[1].outputs[0].amount(),
         Amount::from_sat(50_000)
     );
 
     // Fee account conservation.
     let last = plan.sweep_transactions.last().unwrap();
     assert_eq!(
-        last.destinations[0].1,
+        last.outputs[0].amount(),
         Amount::from_sat(1_000_000) - plan.total_fees
     );
 
@@ -1080,7 +1090,7 @@ fn batched_all_small() {
     // 0 large + 1 bundle + 1 fee = 2
     assert_eq!(plan.sweep_transactions.len(), 2);
     // Bundle has 3 small outputs + 1 fee change = 4.
-    assert_eq!(plan.sweep_transactions[0].destinations.len(), 4);
+    assert_eq!(plan.sweep_transactions[0].outputs.len(), 4);
 }
 
 #[test]
@@ -1154,9 +1164,9 @@ fn sweep_minimal_two_accounts() {
         .plan(&accounts, NETWORK_TYPE, NETWORK_TYPE, rate())
         .unwrap();
     assert_eq!(plan.sweep_transactions.len(), 1);
-    assert_eq!(plan.sweep_transactions[0].destinations.len(), 2);
+    assert_eq!(plan.sweep_transactions[0].outputs.len(), 2);
     assert_eq!(
-        plan.sweep_transactions[0].destinations[1].1,
+        plan.sweep_transactions[0].outputs[1].amount(),
         Amount::from_sat(100_000)
     );
 }
@@ -1173,7 +1183,7 @@ fn batched_minimal_two_accounts() {
     // 1 large customer + 1 fee = 2
     assert_eq!(plan.sweep_transactions.len(), 2);
     assert_eq!(
-        plan.sweep_transactions[0].destinations[0].1,
+        plan.sweep_transactions[0].outputs[0].amount(),
         Amount::from_sat(100_000)
     );
 }
@@ -1199,12 +1209,12 @@ fn sweep_many_accounts() {
         .unwrap();
 
     assert_eq!(plan.sweep_transactions.len(), 1);
-    assert_eq!(plan.sweep_transactions[0].destinations.len(), 21);
+    assert_eq!(plan.sweep_transactions[0].outputs.len(), 21);
     assert_eq!(plan.utxo_count, 21);
 
     // Every customer gets exact 50k.
-    for dest in &plan.sweep_transactions[0].destinations[1..] {
-        assert_eq!(dest.1, Amount::from_sat(50_000));
+    for dest in &plan.sweep_transactions[0].outputs[1..] {
+        assert_eq!(dest.amount(), Amount::from_sat(50_000));
     }
 }
 
@@ -1233,7 +1243,7 @@ fn batched_many_accounts() {
     assert_eq!(plan.sweep_transactions.len(), 7);
 
     // Small bundle has 10 customer outputs + 1 fee change = 11.
-    assert_eq!(plan.sweep_transactions[5].destinations.len(), 11);
+    assert_eq!(plan.sweep_transactions[5].outputs.len(), 11);
 }
 
 #[test]
@@ -1254,13 +1264,13 @@ fn sweep_duplicate_account_idx() {
         .plan(&accounts, NETWORK_TYPE, NETWORK_TYPE, rate())
         .unwrap();
 
-    assert_eq!(plan.sweep_transactions[0].destinations.len(), 3);
+    assert_eq!(plan.sweep_transactions[0].outputs.len(), 3);
     assert_eq!(
-        plan.sweep_transactions[0].destinations[1].1,
+        plan.sweep_transactions[0].outputs[1].amount(),
         Amount::from_sat(100_000)
     );
     assert_eq!(
-        plan.sweep_transactions[0].destinations[2].1,
+        plan.sweep_transactions[0].outputs[2].amount(),
         Amount::from_sat(200_000)
     );
 }
@@ -1284,11 +1294,11 @@ fn batched_duplicate_account_idx() {
     // Both duplicates are large → 2 individual txs + 1 fee = 3.
     assert_eq!(plan.sweep_transactions.len(), 3);
     assert_eq!(
-        plan.sweep_transactions[0].destinations[0].1,
+        plan.sweep_transactions[0].outputs[0].amount(),
         Amount::from_sat(300_000)
     );
     assert_eq!(
-        plan.sweep_transactions[1].destinations[0].1,
+        plan.sweep_transactions[1].outputs[0].amount(),
         Amount::from_sat(200_000)
     );
 }
@@ -1312,7 +1322,7 @@ fn batched_fee_barely_sufficient() {
         .unwrap();
 
     let last = plan.sweep_transactions.last().unwrap();
-    let fee_output = last.destinations[0].1;
+    let fee_output = last.outputs[0].amount();
     assert!(
         fee_output > Amount::ZERO,
         "fee account should have a tiny positive output"
@@ -1347,7 +1357,7 @@ fn batched_fee_account_below_threshold() {
     // Fee account still migrates last with correct value.
     let last = plan.sweep_transactions.last().unwrap();
     assert_eq!(
-        last.destinations[0].1,
+        last.outputs[0].amount(),
         Amount::from_sat(800_000) - plan.total_fees
     );
 }
@@ -1373,11 +1383,11 @@ fn sweep_dust_utxos() {
 
     // Customers get their exact dust amounts (fee comes from acct 0).
     assert_eq!(
-        plan.sweep_transactions[0].destinations[1].1,
+        plan.sweep_transactions[0].outputs[1].amount(),
         Amount::from_sat(546)
     );
     assert_eq!(
-        plan.sweep_transactions[0].destinations[2].1,
+        plan.sweep_transactions[0].outputs[2].amount(),
         Amount::from_sat(300)
     );
 }
@@ -1401,8 +1411,8 @@ fn batched_dust_utxos() {
     // 0 large + 1 bundle + 1 fee = 2.
     assert_eq!(plan.sweep_transactions.len(), 2);
     let bundle = &plan.sweep_transactions[0];
-    assert_eq!(bundle.destinations[0].1, Amount::from_sat(546));
-    assert_eq!(bundle.destinations[1].1, Amount::from_sat(300));
+    assert_eq!(bundle.outputs[0].amount(), Amount::from_sat(546));
+    assert_eq!(bundle.outputs[1].amount(), Amount::from_sat(300));
 }
 
 #[test]
@@ -1426,9 +1436,9 @@ fn sweep_large_values() {
         .unwrap();
 
     let total_out: Amount = plan.sweep_transactions[0]
-        .destinations
+        .outputs
         .iter()
-        .map(|(_, v)| *v)
+        .map(SweepOutput::amount)
         .sum();
     assert_eq!(total_out + plan.total_fees, Amount::from_sat(3_000_000_000));
 }
@@ -1453,16 +1463,16 @@ fn batched_large_values() {
         .unwrap();
 
     assert_eq!(
-        plan.sweep_transactions[0].destinations[0].1,
+        plan.sweep_transactions[0].outputs[0].amount(),
         Amount::from_sat(1_000_000_000)
     );
     assert_eq!(
-        plan.sweep_transactions[1].destinations[0].1,
+        plan.sweep_transactions[1].outputs[0].amount(),
         Amount::from_sat(2_000_000_000)
     );
     let last = plan.sweep_transactions.last().unwrap();
     assert_eq!(
-        last.destinations[0].1,
+        last.outputs[0].amount(),
         Amount::from_sat(5_000_000_000) - plan.total_fees
     );
 }
@@ -1479,7 +1489,7 @@ fn sweep_zero_value_utxo() {
         .plan(&accounts, NETWORK_TYPE, NETWORK_TYPE, rate())
         .unwrap();
 
-    assert_eq!(plan.sweep_transactions[0].destinations[1].1, Amount::ZERO);
+    assert_eq!(plan.sweep_transactions[0].outputs[1].amount(), Amount::ZERO);
     assert_eq!(plan.utxo_count, 2);
 }
 
@@ -1495,7 +1505,7 @@ fn batched_zero_value_utxo() {
 
     // 0-value account is small → bundled. 0 large + 1 bundle + 1 fee = 2.
     assert_eq!(plan.sweep_transactions.len(), 2);
-    assert_eq!(plan.sweep_transactions[0].destinations[0].1, Amount::ZERO);
+    assert_eq!(plan.sweep_transactions[0].outputs[0].amount(), Amount::ZERO);
 }
 
 #[test]
@@ -1508,7 +1518,7 @@ fn sweep_one_sat_customer() {
         .plan(&accounts, NETWORK_TYPE, NETWORK_TYPE, rate())
         .unwrap();
     assert_eq!(
-        plan.sweep_transactions[0].destinations[1].1,
+        plan.sweep_transactions[0].outputs[1].amount(),
         Amount::from_sat(1)
     );
 }
@@ -1524,7 +1534,7 @@ fn batched_one_sat_customer() {
         .unwrap();
     // Small bundle: 1-sat customer output.
     assert_eq!(
-        plan.sweep_transactions[0].destinations[0].1,
+        plan.sweep_transactions[0].outputs[0].amount(),
         Amount::from_sat(1)
     );
 }
@@ -1547,11 +1557,11 @@ fn sweep_zero_fee_rate() {
     assert_eq!(plan.total_fees, Amount::ZERO);
     // Fee account gets its full value (no deduction).
     assert_eq!(
-        plan.sweep_transactions[0].destinations[0].1,
+        plan.sweep_transactions[0].outputs[0].amount(),
         Amount::from_sat(500_000)
     );
     assert_eq!(
-        plan.sweep_transactions[0].destinations[1].1,
+        plan.sweep_transactions[0].outputs[1].amount(),
         Amount::from_sat(100_000)
     );
 }
@@ -1574,7 +1584,7 @@ fn batched_zero_fee_rate() {
 
     assert_eq!(plan.total_fees, Amount::ZERO);
     let last = plan.sweep_transactions.last().unwrap();
-    assert_eq!(last.destinations[0].1, Amount::from_sat(500_000));
+    assert_eq!(last.outputs[0].amount(), Amount::from_sat(500_000));
 }
 
 #[test]
@@ -1592,10 +1602,10 @@ fn sweep_high_fee_rate() {
 
     assert!(plan.total_fees > Amount::from_sat(200_000));
     assert_eq!(
-        plan.sweep_transactions[0].destinations[1].1,
+        plan.sweep_transactions[0].outputs[1].amount(),
         Amount::from_sat(100_000)
     );
-    let fee_out = plan.sweep_transactions[0].destinations[0].1;
+    let fee_out = plan.sweep_transactions[0].outputs[0].amount();
     assert!(
         fee_out < Amount::from_sat(100_000),
         "fee account output should be small at high rate"
@@ -1615,7 +1625,7 @@ fn batched_high_fee_rate() {
 
     assert!(plan.total_fees > Amount::from_sat(400_000));
     assert_eq!(
-        plan.sweep_transactions[0].destinations[0].1,
+        plan.sweep_transactions[0].outputs[0].amount(),
         Amount::from_sat(100_000)
     );
 }
@@ -1640,7 +1650,7 @@ fn sweep_fee_rate_barely_under() {
         .plan(&accounts, NETWORK_TYPE, NETWORK_TYPE, tight)
         .unwrap();
 
-    let fee_out = plan.sweep_transactions[0].destinations[0].1;
+    let fee_out = plan.sweep_transactions[0].outputs[0].amount();
     assert!(fee_out > Amount::ZERO);
     assert!(fee_out < Amount::from_sat(200));
 }
@@ -1660,7 +1670,7 @@ fn batched_fee_rate_barely_under() {
         .unwrap();
 
     let last = plan.sweep_transactions.last().unwrap();
-    let fee_out = last.destinations[0].1;
+    let fee_out = last.outputs[0].amount();
     assert!(
         fee_out > Amount::ZERO,
         "fee account output should still be positive"
@@ -1707,14 +1717,14 @@ fn sweep_input_order_independent() {
     assert_eq!(plan_f.utxo_count, plan_r.utxo_count);
 
     let sum_f: Amount = plan_f.sweep_transactions[0]
-        .destinations
+        .outputs
         .iter()
-        .map(|(_, v)| *v)
+        .map(SweepOutput::amount)
         .sum();
     let sum_r: Amount = plan_r.sweep_transactions[0]
-        .destinations
+        .outputs
         .iter()
-        .map(|(_, v)| *v)
+        .map(SweepOutput::amount)
         .sum();
     assert_eq!(sum_f, sum_r);
 }
@@ -1785,14 +1795,24 @@ fn sweep_same_destination_address() {
         .plan(&accounts, NETWORK_TYPE, NETWORK_TYPE, rate())
         .unwrap();
 
-    // All 3 outputs go to the same address.
-    let addrs: Vec<_> = plan.sweep_transactions[0]
-        .destinations
+    // Decision (b): the planner assigns each Customer output its account's
+    // new-fed address (all `addr` here), but the fee account's output is an
+    // address-less FeeChange — the executor resolves its destination per hop.
+    let tx = &plan.sweep_transactions[0];
+    let customer_addrs: Vec<_> = tx
+        .outputs
         .iter()
-        .map(|(a, _)| a.to_string())
+        .filter_map(|o| match o {
+            SweepOutput::Customer { address, .. } => Some(address.to_string()),
+            SweepOutput::FeeChange { .. } => None,
+        })
         .collect();
-    assert_eq!(addrs[0], addrs[1]);
-    assert_eq!(addrs[1], addrs[2]);
+    assert_eq!(customer_addrs.len(), 2, "two customer outputs (accts 1, 2)");
+    assert_eq!(customer_addrs[0], customer_addrs[1]);
+    assert!(
+        matches!(tx.outputs[0], SweepOutput::FeeChange { .. }),
+        "fee account (idx 0) output is an address-less FeeChange",
+    );
 }
 
 #[test]
@@ -1826,9 +1846,19 @@ fn batched_same_destination_address() {
         .plan(&accounts, NETWORK_TYPE, NETWORK_TYPE, rate())
         .unwrap();
 
-    // Customer output + fee change both go to the same address.
+    // Decision (b): the planner no longer bakes a fee-change address. The
+    // large customer tx carries the customer's new-fed address (Customer) plus
+    // an address-less FeeChange that the executor routes to the fee account's
+    // OLD federation (is_fee_final == false); only the final fee-account tx
+    // crosses to the new federation.
     let large_tx = &plan.sweep_transactions[0];
-    assert_eq!(large_tx.destinations[0].0, large_tx.destinations[1].0);
+    assert!(matches!(large_tx.outputs[0], SweepOutput::Customer { .. }));
+    assert!(matches!(large_tx.outputs[1], SweepOutput::FeeChange { .. }));
+    assert!(!large_tx.is_fee_final, "intermediate tx routes fee change to old-fed");
+
+    let final_tx = plan.sweep_transactions.last().unwrap();
+    assert!(matches!(final_tx.outputs[0], SweepOutput::FeeChange { .. }));
+    assert!(final_tx.is_fee_final, "final fee-account tx crosses to new-fed");
 }
 
 // =========================================================================
@@ -1853,7 +1883,7 @@ fn sweep_complete_signer_replacement() {
         .unwrap();
     assert_eq!(plan.sweep_transactions.len(), 1);
     assert_eq!(
-        plan.sweep_transactions[0].destinations[1].1,
+        plan.sweep_transactions[0].outputs[1].amount(),
         Amount::from_sat(100_000)
     );
 }
@@ -1900,8 +1930,10 @@ fn sweep_no_rotation() {
         .unwrap();
     assert_eq!(plan.sweep_transactions.len(), 1);
     // Still works even though addresses might be identical to old federation's.
-    for (addr, _) in &plan.sweep_transactions[0].destinations {
-        assert!(addr.to_string().starts_with("bcrt1"));
+    for out in &plan.sweep_transactions[0].outputs {
+        if let SweepOutput::Customer { address, .. } = out {
+            assert!(address.to_string().starts_with("bcrt1"));
+        }
     }
 }
 
@@ -2020,40 +2052,40 @@ fn batched_tx_ordering() {
     assert_eq!(plan.sweep_transactions.len(), 4);
 
     // Txs 0,1: large accounts (2 outputs each: customer + fee change).
-    assert_eq!(plan.sweep_transactions[0].destinations.len(), 2);
-    assert_eq!(plan.sweep_transactions[1].destinations.len(), 2);
+    assert_eq!(plan.sweep_transactions[0].outputs.len(), 2);
+    assert_eq!(plan.sweep_transactions[1].outputs.len(), 2);
 
     // Tx 2: small bundle (2 small outputs + 1 fee change = 3).
-    assert_eq!(plan.sweep_transactions[2].destinations.len(), 3);
+    assert_eq!(plan.sweep_transactions[2].outputs.len(), 3);
 
     // Tx 3 (last): fee account migration (1 output).
-    assert_eq!(plan.sweep_transactions[3].destinations.len(), 1);
+    assert_eq!(plan.sweep_transactions[3].outputs.len(), 1);
 
     // Large customer outputs match their input values.
     assert_eq!(
-        plan.sweep_transactions[0].destinations[0].1,
+        plan.sweep_transactions[0].outputs[0].amount(),
         Amount::from_sat(500_000)
     );
     assert_eq!(
-        plan.sweep_transactions[1].destinations[0].1,
+        plan.sweep_transactions[1].outputs[0].amount(),
         Amount::from_sat(300_000)
     );
 
     // Small customer outputs match their input values.
     assert_eq!(
-        plan.sweep_transactions[2].destinations[0].1,
+        plan.sweep_transactions[2].outputs[0].amount(),
         Amount::from_sat(50_000)
     );
     assert_eq!(
-        plan.sweep_transactions[2].destinations[1].1,
+        plan.sweep_transactions[2].outputs[1].amount(),
         Amount::from_sat(30_000)
     );
 
     // Fee chain: each intermediate tx's last destination is fee change.
     // Fee change decreases across the chain.
-    let change_0 = plan.sweep_transactions[0].destinations[1].1;
-    let change_1 = plan.sweep_transactions[1].destinations[1].1;
-    let change_2 = plan.sweep_transactions[2].destinations[2].1;
+    let change_0 = plan.sweep_transactions[0].outputs[1].amount();
+    let change_1 = plan.sweep_transactions[1].outputs[1].amount();
+    let change_2 = plan.sweep_transactions[2].outputs[2].amount();
     assert!(
         change_0 > change_1,
         "fee change should decrease after each tx"
@@ -2097,15 +2129,15 @@ fn cross_algorithm_conservation() {
 
     // A4A: single tx, all outputs.
     let out_a: Amount = plan_a.sweep_transactions[0]
-        .destinations
+        .outputs
         .iter()
-        .map(|(_, v)| *v)
+        .map(SweepOutput::amount)
         .sum();
     assert_eq!(out_a + plan_a.total_fees, total_input);
 
     // Batched: customer outputs are exact; fee output = fee_input - total_fees.
     let customer_out_b = Amount::from_sat(200_000 + 300_000);
-    let fee_out_b = plan_b.sweep_transactions.last().unwrap().destinations[0].1;
+    let fee_out_b = plan_b.sweep_transactions.last().unwrap().outputs[0].amount();
     assert_eq!(customer_out_b + fee_out_b + plan_b.total_fees, total_input);
 
     // Both algorithms sweep the same number of UTXOs.
