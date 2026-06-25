@@ -1854,11 +1854,17 @@ fn batched_same_destination_address() {
     let large_tx = &plan.sweep_transactions[0];
     assert!(matches!(large_tx.outputs[0], SweepOutput::Customer { .. }));
     assert!(matches!(large_tx.outputs[1], SweepOutput::FeeChange { .. }));
-    assert!(!large_tx.is_fee_final, "intermediate tx routes fee change to old-fed");
+    assert!(
+        !large_tx.is_fee_final,
+        "intermediate tx routes fee change to old-fed"
+    );
 
     let final_tx = plan.sweep_transactions.last().unwrap();
     assert!(matches!(final_tx.outputs[0], SweepOutput::FeeChange { .. }));
-    assert!(final_tx.is_fee_final, "final fee-account tx crosses to new-fed");
+    assert!(
+        final_tx.is_fee_final,
+        "final fee-account tx crosses to new-fed"
+    );
 }
 
 // =========================================================================

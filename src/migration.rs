@@ -101,9 +101,8 @@ impl SweepOutput {
     #[must_use]
     pub fn account_idx(&self) -> u32 {
         match self {
-            SweepOutput::Customer { account_idx, .. } | SweepOutput::FeeChange { account_idx, .. } => {
-                *account_idx
-            }
+            SweepOutput::Customer { account_idx, .. }
+            | SweepOutput::FeeChange { account_idx, .. } => *account_idx,
         }
     }
 
@@ -684,7 +683,13 @@ mod tests {
         // Outputs follow input order: acct 0 (fee), acct 1, acct 2.
         assert_eq!(tx.outputs.len(), 3);
 
-        let amount_of = |idx: u32| tx.outputs.iter().find(|o| o.account_idx() == idx).unwrap().amount();
+        let amount_of = |idx: u32| {
+            tx.outputs
+                .iter()
+                .find(|o| o.account_idx() == idx)
+                .unwrap()
+                .amount()
+        };
         // Fee account (idx 0) is a FeeChange output: its value minus the fee.
         assert!(matches!(tx.outputs[0], SweepOutput::FeeChange { .. }));
         assert_eq!(amount_of(0), Amount::from_sat(500_000) - plan.total_fees);
@@ -819,7 +824,10 @@ mod tests {
         // output and `is_fee_final` set.
         assert_eq!(last_tx.outputs.len(), 1);
         assert!(last_tx.is_fee_final);
-        assert!(matches!(last_tx.outputs[0], SweepOutput::FeeChange { account_idx: 0, .. }));
+        assert!(matches!(
+            last_tx.outputs[0],
+            SweepOutput::FeeChange { account_idx: 0, .. }
+        ));
 
         // Every intermediate (non-final) tx carries exactly one FeeChange output
         // and is not marked final.
@@ -830,7 +838,10 @@ mod tests {
                 .iter()
                 .filter(|o| matches!(o, SweepOutput::FeeChange { .. }))
                 .count();
-            assert_eq!(fee_outs, 1, "intermediate tx has exactly one FeeChange output");
+            assert_eq!(
+                fee_outs, 1,
+                "intermediate tx has exactly one FeeChange output"
+            );
         }
     }
 
