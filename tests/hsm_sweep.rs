@@ -1,6 +1,6 @@
 //! Integration tests for sweep algorithms with real HSM-backed signers.
 //!
-//! Uses `asterism-pkcs11` + `asterism-dev-signer` + SoftHSM2 to derive
+//! Uses `asterism-pkcs11` + `asterism-dev-signer` + `SoftHSM2` to derive
 //! real federation keys, build descriptors, and exercise the sweep
 //! planning logic with addresses derived from those descriptors.
 //!
