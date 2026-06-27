@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use bdk_wallet::{SignOptions, Wallet};
-use bitcoin::Psbt;
+use bitcoin::{Amount, FeeRate, Psbt, ScriptBuf, Transaction, Txid};
 
 use crate::error::PsbtError;
 use crate::federation::Federation;
@@ -93,6 +93,104 @@ impl FinalizedPsbt {
     pub fn as_psbt(&self) -> &Psbt {
         &self.psbt
     }
+}
+
+// ---------------------------------------------------------------------------
+// Synchronous primitives
+// ---------------------------------------------------------------------------
+//
+// These are the signing-model-agnostic, persistence-free building blocks the
+// consuming apps compose into their full PSBT lifecycles. They deliberately do
+// *not* touch a database, an RPC node, a mutex, or an async runtime — the
+// caller owns the wallet lock, the changeset persistence, the broadcast, and
+// the Interactive-vs-Autonomous signing orchestration around these calls.
+
+/// Build an unsigned single-recipient spend PSBT.
+///
+/// A thin wrapper over
+/// [`build_tx().add_recipient(..).fee_rate(..).finish()`](bdk_wallet::Wallet::build_tx)
+/// using BDK's default coin-selection algorithm. The caller holds the wallet
+/// lock and is responsible for persisting any reveal-induced changeset
+/// (`take_staged`) afterwards — BDK may reveal a fresh internal change address
+/// during construction.
+///
+/// This is the shared primitive under the xpub app's `build_proposal` and the
+/// pkcs11 app's `build_sign_and_broadcast`. The wallet-draining variants
+/// (`drain_wallet`/`drain_to` for migration sweeps) use a different builder
+/// shape and are intentionally not covered here.
+///
+/// # Errors
+///
+/// Returns [`PsbtError::BuildFailed`] if BDK cannot satisfy the spec (no
+/// spendable UTXOs, dust output, fee floor not met, etc.).
+pub fn build_spend(
+    wallet: &mut Wallet,
+    recipient_spk: ScriptBuf,
+    amount: Amount,
+    fee_rate: FeeRate,
+) -> Result<Psbt, PsbtError> {
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(recipient_spk, amount).fee_rate(fee_rate);
+    builder
+        .finish()
+        .map_err(|e| PsbtError::BuildFailed(e.to_string()))
+}
+
+/// Merge a cosigner's partial PSBT into a base PSBT via
+/// [`Psbt::combine`](bitcoin::Psbt::combine), returning the merged result.
+///
+/// This is the neutral combine primitive under the xpub app's
+/// `merge_partial_signature` (the only caller today — HSMs in the pkcs11 app
+/// never produce a partial-merge step; they sign in one shot through the
+/// [`SigningCoordinator`]). The wallet-dependent "does this now finalize?"
+/// probe stays app-side, since it requires the wallet lock.
+///
+/// # Errors
+///
+/// Returns [`PsbtError::Bitcoin`] if [`Psbt::combine`](bitcoin::Psbt::combine)
+/// rejects the input (e.g. the two PSBTs reference different unsigned
+/// transactions).
+pub fn combine_psbt(mut base: Psbt, partial: Psbt) -> Result<Psbt, PsbtError> {
+    base.combine(partial)
+        .map_err(|e| PsbtError::Bitcoin(e.to_string()))?;
+    Ok(base)
+}
+
+/// Finalize a fully-signed PSBT and extract the broadcastable transaction.
+///
+/// Delegates to [`bdk_wallet::Wallet::finalize_psbt`] with
+/// [`SignOptions::default`] and then [`Psbt::extract_tx`]. Distinguishes the
+/// three failure modes the apps care about:
+///
+/// - a hard BDK finalizer error → [`PsbtError::FinalizationFailed`];
+/// - `Ok(false)` (no error, but not every input is satisfied — the threshold
+///   is not yet met) → [`PsbtError::ThresholdNotMet`];
+/// - a malformed PSBT that finalizes but won't extract →
+///   [`PsbtError::ExtractFailed`].
+///
+/// This is the standalone finalize path under the xpub app's
+/// `finalize_and_extract`. (The pkcs11 app finalizes through
+/// [`SigningCoordinator::finalize`] instead, which carries the coordinator's
+/// signature-count invariant.)
+///
+/// # Errors
+///
+/// See the failure modes above.
+pub fn finalize_and_extract(
+    wallet: &Wallet,
+    mut psbt: Psbt,
+) -> Result<(Transaction, Txid), PsbtError> {
+    let finalized = wallet
+        .finalize_psbt(&mut psbt, SignOptions::default())
+        .map_err(|e| PsbtError::FinalizationFailed(e.to_string()))?;
+    if !finalized {
+        return Err(PsbtError::ThresholdNotMet);
+    }
+    let transaction = psbt
+        .extract_tx()
+        .map_err(|e| PsbtError::ExtractFailed(e.to_string()))?;
+    let txid = transaction.compute_txid();
+    Ok((transaction, txid))
 }
 
 // ---------------------------------------------------------------------------
@@ -396,10 +494,14 @@ mod tests {
     use super::*;
 
     fn empty_psbt() -> Psbt {
+        empty_psbt_at(bitcoin::absolute::LockTime::ZERO)
+    }
+
+    fn empty_psbt_at(lock_time: bitcoin::absolute::LockTime) -> Psbt {
         // Construct a minimal PSBT (no inputs, no outputs) for newtype tests.
         let tx = bitcoin::Transaction {
             version: bitcoin::transaction::Version::TWO,
-            lock_time: bitcoin::absolute::LockTime::ZERO,
+            lock_time,
             input: vec![],
             output: vec![],
         };
@@ -410,5 +512,50 @@ mod tests {
     fn unsigned_psbt_accepts_zero_sig_psbt() {
         let p = empty_psbt();
         let _ = UnsignedPsbt::new(p).unwrap();
+    }
+
+    #[test]
+    fn combine_psbt_merges_matching_unsigned_tx() {
+        // Two PSBTs over the *same* unsigned tx combine without error.
+        let base = empty_psbt();
+        let other = empty_psbt();
+        let merged = combine_psbt(base, other).expect("matching PSBTs combine");
+        assert_eq!(merged.inputs.len(), 0);
+    }
+
+    #[test]
+    fn combine_psbt_rejects_mismatched_unsigned_tx() {
+        // PSBTs describing different unsigned transactions must be rejected
+        // (mapped to PsbtError::Bitcoin), not silently merged.
+        let base = empty_psbt_at(bitcoin::absolute::LockTime::ZERO);
+        let other = empty_psbt_at(bitcoin::absolute::LockTime::from_height(1).unwrap());
+        let err = combine_psbt(base, other).expect_err("mismatched PSBTs must error");
+        assert!(matches!(err, PsbtError::Bitcoin(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn build_spend_on_unfunded_wallet_reports_build_failed() {
+        // A wallet with no UTXOs cannot fund any spend; build_spend must
+        // surface that as BuildFailed rather than panicking.
+        let xpriv = bitcoin::bip32::Xpriv::new_master(bitcoin::Network::Regtest, &[7u8; 32])
+            .expect("valid master");
+        let external = format!("wpkh({xpriv}/84h/1h/0h/0/*)");
+        let internal = format!("wpkh({xpriv}/84h/1h/0h/1/*)");
+        let mut wallet = Wallet::create(external, internal)
+            .network(bitcoin::Network::Regtest)
+            .create_wallet_no_persist()
+            .expect("create signable single-sig wallet");
+        let recipient = wallet
+            .peek_address(bdk_wallet::KeychainKind::External, 0)
+            .address
+            .script_pubkey();
+        let err = build_spend(
+            &mut wallet,
+            recipient,
+            bitcoin::Amount::from_sat(10_000),
+            bitcoin::FeeRate::from_sat_per_vb(1).unwrap(),
+        )
+        .expect_err("unfunded wallet cannot build a spend");
+        assert!(matches!(err, PsbtError::BuildFailed(_)), "got {err:?}");
     }
 }

@@ -152,6 +152,21 @@ pub enum PsbtError {
     /// BDK refused to finalize the PSBT.
     #[error("PSBT finalization failed: {0}")]
     FinalizationFailed(String),
+    /// `Wallet::build_tx().finish()` failed (no spendable UTXOs, dust output,
+    /// fee floor not met, etc.).
+    #[error("transaction construction failed: {0}")]
+    BuildFailed(String),
+    /// `Wallet::finalize_psbt` returned `Ok(false)` — it hit no error but
+    /// could not satisfy every input. Typically the m-of-n threshold has not
+    /// yet been met. Distinct from [`PsbtError::FinalizationFailed`] (which is
+    /// a hard BDK error) and [`PsbtError::InsufficientSignatures`] (the
+    /// coordinator's count-based pre-check).
+    #[error("PSBT cannot yet be finalized: not enough signatures to satisfy every input")]
+    ThresholdNotMet,
+    /// `Psbt::extract_tx` failed after a successful finalize (only happens for
+    /// malformed PSBTs).
+    #[error("failed to extract transaction from finalized PSBT: {0}")]
+    ExtractFailed(String),
     /// Wrapped BDK signer error.
     #[error("BDK signer error: {0}")]
     BdkSigner(String),

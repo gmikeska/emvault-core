@@ -85,14 +85,17 @@
     clippy::missing_const_for_fn,
 )]
 
+pub mod chain_sync;
 pub mod descriptor;
 pub mod error;
 pub mod federated_wallet;
 pub mod federation;
+pub mod federation_build;
 pub mod migration;
 pub mod network;
 pub mod psbt;
 pub mod recovery;
+pub mod roster;
 pub mod signer;
 pub mod snapshot;
 
@@ -109,6 +112,7 @@ pub use error::{
 };
 pub use federated_wallet::{BtcFederatedWallet, FederatedWallet, FederationWallet};
 pub use federation::Federation;
+pub use federation_build::{BuiltFederation, build_federation};
 pub use migration::{
     AccountForAccountBatchedSweep, AccountForAccountSweep, AccountUtxoSet, FederationMigration,
     MigrationPlan, SweepAlgorithm, SweepOutput, SweepTransaction,
