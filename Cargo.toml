@@ -2,7 +2,7 @@
 name = "emvault-core"
 version = "0.1.0"
 edition = "2024"
-description = "Core abstractions for the Emerald multi-signature custody platform: Signer trait, Federation, descriptor builder, PSBT pipeline, and recovery."
+description = "Core abstractions for the EmVault multi-signature custody platform: Signer trait, Federation, descriptor builder, PSBT pipeline, and recovery."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/gmikeska/emvault-core"
 
