@@ -635,7 +635,8 @@ mod tests {
                 .iter()
                 .enumerate()
                 .map(|(i, &amt)| {
-                    let global_idx = account_idx * 100 + u32::try_from(i).expect("test index fits u32");
+                    let global_idx =
+                        account_idx * 100 + u32::try_from(i).expect("test index fits u32");
                     dummy_utxo(amt, global_idx)
                 })
                 .collect(),

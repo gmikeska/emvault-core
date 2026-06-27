@@ -168,10 +168,7 @@ pub enum ChainSyncError {
 /// # Errors
 /// [`ChainSyncError::Rpc`] on RPC failure; [`ChainSyncError::ApplyBlock`] if
 /// an emitted block can't be connected to the wallet's local chain.
-pub fn emitter_sync<R: RpcApi>(
-    wallet: &mut Wallet,
-    rpc: &R,
-) -> Result<SyncResult, ChainSyncError> {
+pub fn emitter_sync<R: RpcApi>(wallet: &mut Wallet, rpc: &R) -> Result<SyncResult, ChainSyncError> {
     let cp = wallet.latest_checkpoint();
     let start_height = cp.height();
     let mut emitter = Emitter::new(rpc, cp, start_height, NO_EXPECTED_MEMPOOL_TXS);

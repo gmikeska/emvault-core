@@ -167,13 +167,8 @@ fn psbt_lifecycle_reaches_mempool_and_confirms() {
     // Spend half the balance; the remainder comfortably covers fee + change.
     let amount = Amount::from_sat(balance.confirmed.to_sat() / 2);
     let fee_rate = FeeRate::from_sat_per_vb(2).expect("non-zero fee rate");
-    let mut psbt = build_spend(
-        &mut wallet,
-        dest.script_pubkey(),
-        amount,
-        fee_rate,
-    )
-    .expect("build_spend");
+    let mut psbt =
+        build_spend(&mut wallet, dest.script_pubkey(), amount, fee_rate).expect("build_spend");
 
     // --- sign without finalizing (mirrors the apps' try_finalize:false path) ---
     let sign_only = SignOptions {
@@ -195,7 +190,9 @@ fn psbt_lifecycle_reaches_mempool_and_confirms() {
     eprintln!("[{test}] finalized tx {txid}");
 
     // --- broadcast (app-layer in production; done directly here) ---
-    let broadcast_txid = base.send_raw_transaction(&tx).expect("send_raw_transaction");
+    let broadcast_txid = base
+        .send_raw_transaction(&tx)
+        .expect("send_raw_transaction");
     assert_eq!(
         broadcast_txid, txid,
         "broadcast txid must match the extracted transaction's txid"

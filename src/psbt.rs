@@ -130,7 +130,9 @@ pub fn build_spend(
     fee_rate: FeeRate,
 ) -> Result<Psbt, PsbtError> {
     let mut builder = wallet.build_tx();
-    builder.add_recipient(recipient_spk, amount).fee_rate(fee_rate);
+    builder
+        .add_recipient(recipient_spk, amount)
+        .fee_rate(fee_rate);
     builder
         .finish()
         .map_err(|e| PsbtError::BuildFailed(e.to_string()))
