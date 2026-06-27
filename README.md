@@ -5,11 +5,15 @@ Core abstractions for the Emerald multi-signature custody platform: the
 signing pipeline, recovery templates, and snapshots.
 
 `asterism-core` is the foundation crate of the [Asterism] library family. It
-is the only crate every Asterism consumer depends on; backend crates
-(`asterism-pkcs11`, `asterism-xpub`) and integration crates
-(`asterism-elements`, `asterism-policy`) layer on top of it.
+is the only crate every Asterism consumer depends on; the backend crates
+([`asterism-pkcs11`](https://github.com/gmikeska/asterism-pkcs11),
+[`asterism-xpub`](https://github.com/gmikeska/asterism-xpub)) and the Elements
+integration crate
+([`asterism-elements`](https://github.com/gmikeska/asterism-elements)) layer on
+top of it. The [`asterism`](https://github.com/gmikeska/asterism) umbrella crate
+re-exports the whole family behind feature gates.
 
-[Asterism]: ../design_docs/asterism_multisignature_library.md
+[Asterism]: https://github.com/gmikeska/asterism
 
 ## Design priorities
 
@@ -33,9 +37,11 @@ In order, this crate optimizes for:
 | [`signer`](src/signer.rs)    | `Signer` trait + identity types                    |
 | [`network`](src/network.rs)  | `NetworkType` (Bitcoin only in v1, `#[non_exhaustive]`) |
 | [`federation`](src/federation.rs) | `Federation<S>` + immutable mutation APIs     |
+| [`federation_build`](src/federation_build.rs) | `build_federation` — canonical descriptor + snapshot from a signer set |
 | [`descriptor`](src/descriptor.rs) | `wsh(sortedmulti(...))` builder              |
-| [`taproot`](src/taproot.rs)  | `tr(NUMS, { ... })` MAST builder                  |
+| [`federated_wallet`](src/federated_wallet.rs) | `BtcFederatedWallet` — version-aware federated wallet |
 | [`psbt`](src/psbt.rs)        | `UnsignedPsbt` / `FinalizedPsbt`, `SigningCoordinator` |
+| [`roster`](src/roster.rs)    | Pure roster arithmetic for migrations (add/remove/threshold) |
 | [`recovery`](src/recovery.rs) | `RecoveryTemplate` with per-software instructions |
 | [`snapshot`](src/snapshot.rs) | Canonical-JSON federation export/import          |
 | [`migration`](src/migration.rs) | `SweepAlgorithm`, `FederationMigration`, plans |
@@ -73,24 +79,13 @@ println!("{}", template.to_printable());
 # Ok::<(), asterism_core::AsterismError>(())
 ```
 
-## Hybrid (Taproot MAST) federations
+## Roadmap: hybrid (Taproot MAST) federations
 
-For deployments mixing HSMs with consumer hardware wallets, use
-`TaprootFederationBuilder` to encode three spending paths as separate MAST
-leaves: HSM-unanimous, wallet-unanimous, and mixed. The internal key is set to
-the BIP-341 NUMS point so no single-party key path is possible.
-
-```rust
-use asterism_core::{NetworkType, TaprootFederationBuilder};
-use bitcoin::Network;
-
-let mut b = TaprootFederationBuilder::new(NetworkType::Bitcoin(Network::Testnet));
-// b.add_hsm_signer(...).add_hsm_signer(...);
-// b.add_wallet_signer(...).add_wallet_signer(...);
-// b.mixed_threshold(2);
-// let federation = b.build()?;
-# Ok::<(), asterism_core::AsterismError>(())
-```
+> **Planned, not yet implemented.** A `tr(NUMS, { … })` MAST builder encoding
+> distinct spending paths (HSM-unanimous, wallet-unanimous, mixed) with the
+> internal key pinned to the BIP-341 NUMS point is a roadmap item. Today the
+> crate ships `wsh(sortedmulti(...))` P2WSH federations only (see
+> [`descriptor`](src/descriptor.rs)).
 
 ## Signing flow
 
@@ -131,9 +126,9 @@ let mut b = TaprootFederationBuilder::new(NetworkType::Bitcoin(Network::Testnet)
 `Federation` is **immutable**. Every mutation
 (`add_signer`, `remove_signer`, `rotate_signer`, `change_threshold`) returns a
 fresh `Federation`. Funds do not move automatically — the consuming app uses
-`SweepAlgorithm` impls (`ConsolidationSweep`, `AddressForAddressSweep`,
-`BatchedSweep`) inside a `FederationMigration` to plan the actual transfer
-of UTXOs to the new federation.
+`SweepAlgorithm` impls (`AccountForAccountSweep`, `AccountForAccountBatchedSweep`)
+inside a `FederationMigration` to plan the actual transfer of UTXOs to the new
+federation.
 
 ## Recovery templates
 
