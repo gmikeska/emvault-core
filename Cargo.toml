@@ -1,10 +1,10 @@
 [package]
-name = "asterism-core"
+name = "emvault-core"
 version = "0.1.0"
 edition = "2024"
 description = "Core abstractions for the Emerald multi-signature custody platform: Signer trait, Federation, descriptor builder, PSBT pipeline, and recovery."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/gmikeska/asterism-core"
+repository = "https://github.com/gmikeska/emvault-core"
 
 [features]
 default = []
@@ -13,11 +13,11 @@ test-utils = []
 # Enable RPC tests against an external bitcoind via .env (BITCOIN_RPC_*).
 node-tests = []
 # Enable Elements/Liquid-aware types in `NetworkType`. The actual Elements
-# pipeline lives in the `asterism-elements` companion crate; this feature only
-# adds the discriminant variants `asterism-elements` needs to refer to.
+# pipeline lives in the `emvault-elements` companion crate; this feature only
+# adds the discriminant variants `emvault-elements` needs to refer to.
 elements = []
 # Integration tests that exercise sweep algorithms with real HSM-backed
-# signers (asterism-pkcs11 + asterism-dev-signer + SoftHSM2).
+# signers (emvault-pkcs11 + emvault-dev-signer + SoftHSM2).
 hsm-sweep-tests = []
 
 [dependencies]
@@ -41,6 +41,6 @@ proptest = "1.11.0"
 rand = "0.10.1"
 ureq = { version = "2.10", features = ["json"] }
 dotenvy = "0.15.7"
-asterism-pkcs11 = { path = "../asterism-pkcs11" }
-asterism-dev-signer = { path = "../asterism-dev-signer" }
+emvault-pkcs11 = { path = "../emvault-pkcs11" }
+emvault-dev-signer = { path = "../emvault-dev-signer" }
 serial_test = "3.5.0"

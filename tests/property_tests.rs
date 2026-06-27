@@ -1,22 +1,22 @@
-//! Property tests for asterism-core invariants.
+//! Property tests for emvault-core invariants.
 //!
 //! These complement the per-module unit tests by exercising arbitrary
 //! threshold/signer-count combinations and verifying the round-trip
 //! invariants documented in the design.
 //!
 //! Requires the `test-utils` feature for `MockSigner`. Run via:
-//! `cargo test -p asterism-core --features test-utils`.
+//! `cargo test -p emvault-core --features test-utils`.
 #![cfg(feature = "test-utils")]
 
-use asterism_core::{
+use emvault_core::{
     Federation, FederationError, FederationSnapshot, NetworkType, RecoveryTemplate, Signer,
 };
 use bitcoin::Network;
 use proptest::prelude::*;
 
 mod harness {
-    use asterism_core::Signer;
-    use asterism_core::test_utils::MockSigner;
+    use emvault_core::Signer;
+    use emvault_core::test_utils::MockSigner;
     use bitcoin::Network;
 
     pub fn make_signers(seeds: &[u64]) -> Vec<Box<dyn Signer>> {
@@ -171,7 +171,7 @@ fn add_then_remove_returns_same_descriptor() {
         NetworkType::Bitcoin(Network::Testnet),
     )
     .unwrap();
-    let new_signer = asterism_core::test_utils::MockSigner::with_seed(99, Network::Testnet);
+    let new_signer = emvault_core::test_utils::MockSigner::with_seed(99, Network::Testnet);
     let new_id = new_signer.id();
     let added = original.add_signer(new_signer).unwrap();
     let restored = added.remove_signer(&new_id).unwrap();
@@ -180,13 +180,13 @@ fn add_then_remove_returns_same_descriptor() {
 
 #[test]
 fn rotate_then_rotate_back_returns_same_descriptor() {
-    let s1 = asterism_core::test_utils::MockSigner::with_seed(1, Network::Testnet);
-    let s2 = asterism_core::test_utils::MockSigner::with_seed(2, Network::Testnet);
-    let s3 = asterism_core::test_utils::MockSigner::with_seed(3, Network::Testnet);
+    let s1 = emvault_core::test_utils::MockSigner::with_seed(1, Network::Testnet);
+    let s2 = emvault_core::test_utils::MockSigner::with_seed(2, Network::Testnet);
+    let s3 = emvault_core::test_utils::MockSigner::with_seed(3, Network::Testnet);
     let id1 = s1.id();
     let signers = vec![s1.clone(), s2, s3];
     let original = Federation::new(2, signers, NetworkType::Bitcoin(Network::Testnet)).unwrap();
-    let replacement = asterism_core::test_utils::MockSigner::with_seed(99, Network::Testnet);
+    let replacement = emvault_core::test_utils::MockSigner::with_seed(99, Network::Testnet);
     let replacement_id = replacement.id();
     let rotated = original.rotate_signer(&id1, &replacement).unwrap();
     let unrotated = rotated.rotate_signer(&replacement_id, &s1).unwrap();

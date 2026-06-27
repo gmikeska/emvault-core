@@ -38,7 +38,7 @@ impl MockSigner {
 
     /// Build a `MockSigner` declaring itself as an HSM (i.e. `Software` signer
     /// type). Useful for testing federation flows that need a `Software`
-    /// signer without depending on `asterism-pkcs11`.
+    /// signer without depending on `emvault-pkcs11`.
     pub fn hsm(seed: u64, network: Network) -> Self {
         Self::with_seed_and_type(
             seed,

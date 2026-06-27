@@ -3,7 +3,7 @@
 //! [`NetworkType`] discriminates between supported networks. The Bitcoin
 //! variant is always available; the Elements variant is gated behind the
 //! `elements` feature and is consumed by the
-//! [`asterism-elements`](https://docs.rs/asterism-elements) crate.
+//! [`emvault-elements`](https://docs.rs/emvault-elements) crate.
 //!
 //! The enum is `#[non_exhaustive]` so additional networks can be added
 //! without a breaking change.
@@ -22,7 +22,7 @@ pub enum NetworkType {
     /// Bitcoin mainnet, testnet, signet, or regtest.
     Bitcoin(bitcoin::Network),
     /// Elements / Liquid network. The richer
-    /// `asterism_elements::ElementsNetwork` type lives in the companion
+    /// `emvault_elements::ElementsNetwork` type lives in the companion
     /// crate and converts to/from this lightweight discriminant.
     #[cfg(feature = "elements")]
     Elements(ElementsNetworkId),
@@ -31,9 +31,9 @@ pub enum NetworkType {
 /// Identifier for an Elements/Liquid network.
 ///
 /// This is a deliberately small enum carried inside [`NetworkType::Elements`]
-/// so that `asterism-core` does not need to depend on `lwk_wollet` or
+/// so that `emvault-core` does not need to depend on `lwk_wollet` or
 /// `elements`. The richer
-/// [`asterism_elements::ElementsNetwork`](https://docs.rs/asterism-elements)
+/// [`emvault_elements::ElementsNetwork`](https://docs.rs/emvault-elements)
 /// adds parameters like the policy asset for regtest deployments and converts
 /// to/from this type.
 #[cfg(feature = "elements")]

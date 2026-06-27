@@ -20,7 +20,7 @@
 //! over coin selection details, fee rounding, and BIP-32 derivation
 //! population. Future versions may populate `psbt` directly.
 //!
-//! See `design_docs/asterism_multisignature_library.md`, section
+//! See `design_docs/emvault_multisignature_library.md`, section
 //! "Federation Migration Types and Sweep Algorithms".
 
 use std::marker::PhantomData;

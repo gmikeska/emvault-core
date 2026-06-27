@@ -1,4 +1,4 @@
-//! Live verification of [`asterism_core::chain_sync::emitter_sync`] against a
+//! Live verification of [`emvault_core::chain_sync::emitter_sync`] against a
 //! running Bitcoin Core regtest node (E3b).
 //!
 //! Gated behind the `node-tests` feature. Skips with a printed message when
@@ -8,19 +8,19 @@
 //! Run with (from inside the container, overriding the host-oriented `.env`):
 //! ```bash
 //! BITCOIN_RPC_HOST=host.docker.internal \
-//!   cargo test -p asterism-core --features "test-utils node-tests" \
+//!   cargo test -p emvault-core --features "test-utils node-tests" \
 //!   --test emitter_sync_live -- --nocapture
 //! ```
 #![cfg(all(feature = "test-utils", feature = "node-tests"))]
 
 use std::path::PathBuf;
 
-use asterism_core::chain_sync::{emitter_sync, init_or_load_wallet};
-use asterism_core::{NetworkType, build_federation, test_utils::MockSigner};
+use emvault_core::chain_sync::{emitter_sync, init_or_load_wallet};
+use emvault_core::{NetworkType, build_federation, test_utils::MockSigner};
 use bitcoin::Network;
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 
-/// Best-effort load of `asterism-core/.env`. Does **not** override env vars
+/// Best-effort load of `emvault-core/.env`. Does **not** override env vars
 /// already set in the process, so a runtime `BITCOIN_RPC_HOST` override (e.g.
 /// `host.docker.internal` from inside a container) wins over the file's value.
 fn load_env() {

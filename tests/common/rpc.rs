@@ -24,16 +24,16 @@ use serde_json::{Value, json};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Loads the workspace `.env` file (the one at `asterism-core/.env`).
+/// Loads the workspace `.env` file (the one at `emvault-core/.env`).
 ///
 /// Best-effort — silently no-ops if the file is missing.
 pub fn load_env() {
     let env_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".env");
     let _ = dotenvy::from_path(&env_path);
-    // Fall back to crate-relative path for asterism-pkcs11 use.
+    // Fall back to crate-relative path for emvault-pkcs11 use.
     let alt = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .map(|p| p.join("asterism-core/.env"));
+        .map(|p| p.join("emvault-core/.env"));
     if let Some(p) = alt {
         let _ = dotenvy::from_path(&p);
     }
@@ -94,7 +94,7 @@ impl RpcClient {
     fn call(&self, method: &str, params: &Value) -> Result<Value, RpcError> {
         let body = json!({
             "jsonrpc": "1.0",
-            "id": "asterism-test",
+            "id": "emvault-test",
             "method": method,
             "params": params.clone(),
         });

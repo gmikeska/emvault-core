@@ -295,7 +295,7 @@ impl RecoveryTemplate {
     /// Render a human-readable text representation suitable for printing.
     pub fn to_printable(&self) -> String {
         let mut out = String::new();
-        out.push_str("Asterism Federation Recovery Template\n");
+        out.push_str("EmVault Federation Recovery Template\n");
         out.push_str("======================================\n");
         let _ = writeln!(
             out,
@@ -378,11 +378,11 @@ fn bitcoin_core_instructions(t: &RecoveryTemplate) -> RecoveryInstructions {
         min_version: Some("24.0".into()),
         steps: vec![
             "Start `bitcoind` and create (or unlock) a descriptor wallet:".into(),
-            "  bitcoin-cli createwallet \"asterism-recovery\" false false \"\" false true".into(),
+            "  bitcoin-cli createwallet \"emvault-recovery\" false false \"\" false true".into(),
             format!(
                 "Import the federation descriptor with `importdescriptors` (timestamp={timestamp} performs a full chain rescan):"
             ),
-            format!("  bitcoin-cli -rpcwallet=asterism-recovery importdescriptors '{payload}'"),
+            format!("  bitcoin-cli -rpcwallet=emvault-recovery importdescriptors '{payload}'"),
             "Once the import completes, use `getbalance` and `listtransactions` to confirm the federation's UTXO history is visible.".into(),
         ],
     }

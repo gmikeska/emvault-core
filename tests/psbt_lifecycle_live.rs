@@ -1,4 +1,4 @@
-//! Live verification of the `asterism_core::psbt` synchronous primitives
+//! Live verification of the `emvault_core::psbt` synchronous primitives
 //! against a running Bitcoin Core regtest node (E4).
 //!
 //! Exercises the full extracted lifecycle end-to-end:
@@ -17,7 +17,7 @@
 //! Run with (from inside the container, overriding the host-oriented `.env`):
 //! ```bash
 //! BITCOIN_RPC_HOST=host.docker.internal \
-//!   cargo test -p asterism-core --features node-tests \
+//!   cargo test -p emvault-core --features node-tests \
 //!   --test psbt_lifecycle_live -- --nocapture
 //! ```
 #![cfg(feature = "node-tests")]
@@ -25,14 +25,14 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use asterism_core::chain_sync::emitter_sync;
-use asterism_core::psbt::{build_spend, finalize_and_extract};
+use emvault_core::chain_sync::emitter_sync;
+use emvault_core::psbt::{build_spend, finalize_and_extract};
 use bdk_wallet::{KeychainKind, SignOptions, Wallet};
 use bitcoin::bip32::Xpriv;
 use bitcoin::{Amount, FeeRate, Network};
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 
-/// Best-effort load of `asterism-core/.env`. Does **not** override env vars
+/// Best-effort load of `emvault-core/.env`. Does **not** override env vars
 /// already set in the process, so a runtime `BITCOIN_RPC_HOST` override (e.g.
 /// `host.docker.internal` from inside a container) wins over the file's value.
 fn load_env() {

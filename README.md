@@ -1,19 +1,19 @@
-# asterism-core
+# emvault-core
 
 Core abstractions for the Emerald multi-signature custody platform: the
 `Signer` trait, the `Federation` type, descriptor construction, the PSBT
 signing pipeline, recovery templates, and snapshots.
 
-`asterism-core` is the foundation crate of the [Asterism] library family. It
-is the only crate every Asterism consumer depends on; the backend crates
-([`asterism-pkcs11`](https://github.com/gmikeska/asterism-pkcs11),
-[`asterism-xpub`](https://github.com/gmikeska/asterism-xpub)) and the Elements
+`emvault-core` is the foundation crate of the [EmVault] library family. It
+is the only crate every EmVault consumer depends on; the backend crates
+([`emvault-pkcs11`](https://github.com/gmikeska/emvault-pkcs11),
+[`emvault-xpub`](https://github.com/gmikeska/emvault-xpub)) and the Elements
 integration crate
-([`asterism-elements`](https://github.com/gmikeska/asterism-elements)) layer on
-top of it. The [`asterism`](https://github.com/gmikeska/asterism) umbrella crate
+([`emvault-elements`](https://github.com/gmikeska/emvault-elements)) layer on
+top of it. The [`emvault`](https://github.com/gmikeska/emvault) umbrella crate
 re-exports the whole family behind feature gates.
 
-[Asterism]: https://github.com/gmikeska/asterism
+[EmVault]: https://github.com/gmikeska/emvault
 
 ## Design priorities
 
@@ -22,7 +22,7 @@ In order, this crate optimizes for:
 1. **Developer ergonomics.** Building a federation, generating its descriptor,
    and coordinating signing should be a handful of lines of obvious code.
 2. **Ecosystem leverage.** Wallet state, coin selection, chain sync, and
-   transaction broadcast are not Asterism's job — `bdk_wallet::Wallet` (and
+   transaction broadcast are not EmVault's job — `bdk_wallet::Wallet` (and
    later `lwk_wollet::Wollet`) own those. We coordinate; we do not duplicate.
 3. **Compile-time safety.** `UnsignedPsbt` and `FinalizedPsbt` newtypes make
    invalid states unrepresentable. The signing pipeline cannot accept a
@@ -52,16 +52,16 @@ In order, this crate optimizes for:
 Building a 2-of-3 federation and deriving the canonical descriptor:
 
 ```rust
-use asterism_core::{Federation, NetworkType, Signer};
+use emvault_core::{Federation, NetworkType, Signer};
 use bitcoin::Network;
 
 // In real code, `alice`/`bob`/`carol` come from companion crates:
-//   asterism_xpub::ExternalSigner   for consumer hardware wallets,
-//   asterism_pkcs11::Pkcs11Signer  for HSMs.
-// Both implement `asterism_core::Signer`.
-let alice: Box<dyn Signer> = /* ... build via asterism-xpub ... */;
-let bob:   Box<dyn Signer> = /* ... build via asterism-pkcs11 ... */;
-let carol: Box<dyn Signer> = /* ... build via asterism-xpub ... */;
+//   emvault_xpub::ExternalSigner   for consumer hardware wallets,
+//   emvault_pkcs11::Pkcs11Signer  for HSMs.
+// Both implement `emvault_core::Signer`.
+let alice: Box<dyn Signer> = /* ... build via emvault-xpub ... */;
+let bob:   Box<dyn Signer> = /* ... build via emvault-pkcs11 ... */;
+let carol: Box<dyn Signer> = /* ... build via emvault-xpub ... */;
 
 let federation = Federation::new(
     2,
@@ -74,9 +74,9 @@ let descriptor = federation.descriptor_string();
 println!("descriptor: {descriptor}");
 
 // Or drop into a recovery-friendly artifact:
-let template = asterism_core::RecoveryTemplate::from_federation(&federation);
+let template = emvault_core::RecoveryTemplate::from_federation(&federation);
 println!("{}", template.to_printable());
-# Ok::<(), asterism_core::AsterismError>(())
+# Ok::<(), emvault_core::EmVaultError>(())
 ```
 
 ## Roadmap: hybrid (Taproot MAST) federations
@@ -96,7 +96,7 @@ println!("{}", template.to_printable());
                 └──────────────┬──────────────┘
                                │ Psbt
                 ┌──────────────▼──────────────┐
-                │ UnsignedPsbt::new(psbt)     │  asterism-core
+                │ UnsignedPsbt::new(psbt)     │  emvault-core
                 └──────────────┬──────────────┘
                                │
                 ┌──────────────▼──────────────┐

@@ -1,8 +1,8 @@
-# Dev shim seed configuration for asterism-core integration tests.
+# Dev shim seed configuration for emvault-core integration tests.
 #
 # These tokens use the "core-test-" prefix to avoid colliding with
-# the test-app-pkcs11 tokens ("asterism-pkcs11-app-") or the
-# asterism-pkcs11 integration tokens ("asterism-hsm-").
+# the test-app-pkcs11 tokens ("emvault-pkcs11-app-") or the
+# emvault-pkcs11 integration tokens ("emvault-hsm-").
 #
 # All mnemonics are valid BIP-39 (checksum-verified, 24 words).
 

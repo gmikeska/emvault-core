@@ -1,4 +1,4 @@
-//! Cross-validate Asterism's locally-derived descriptors and addresses
+//! Cross-validate EmVault's locally-derived descriptors and addresses
 //! against a running Bitcoin Core node via JSON-RPC.
 //!
 //! Gated behind the `node-tests` feature. Tests skip with a printed message
@@ -7,12 +7,12 @@
 //!
 //! Run with:
 //! ```bash
-//! cargo test -p asterism-core --features "test-utils node-tests" \
+//! cargo test -p emvault-core --features "test-utils node-tests" \
 //!   --test node_cross_check -- --nocapture
 //! ```
 #![cfg(all(feature = "test-utils", feature = "node-tests"))]
 
-use asterism_core::{Federation, NetworkType, Signer, test_utils::MockSigner};
+use emvault_core::{Federation, NetworkType, Signer, test_utils::MockSigner};
 use bitcoin::Network;
 use miniscript::{Descriptor, DescriptorPublicKey};
 
@@ -86,7 +86,7 @@ fn strip_checksum(s: &str) -> &str {
 }
 
 /// Compare a Bitcoin Core descriptor (potentially decorated by core) to the
-/// asterism-produced descriptor. Both must produce the same checksum.
+/// emvault-produced descriptor. Both must produce the same checksum.
 fn assert_descriptors_equivalent(local: &str, remote: &str, remote_checksum: &str) {
     // Bitcoin Core canonicalizes `sortedmulti` sometimes by reordering
     // pre-derivation; the checksum comparison is the strongest invariant.
@@ -157,7 +157,7 @@ fn fixed_wsh_descriptor_round_trips_through_core() {
 
 #[test]
 fn ranged_wsh_descriptor_round_trips_through_core() {
-    use asterism_core::descriptor::{DescriptorBuilder, KeyMode};
+    use emvault_core::descriptor::{DescriptorBuilder, KeyMode};
 
     let Some(c) = rpc_or_skip("ranged_wsh_descriptor_round_trips_through_core") else {
         return;

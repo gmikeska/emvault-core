@@ -1,14 +1,14 @@
 //! Integration tests for sweep algorithms with real HSM-backed signers.
 //!
-//! Uses `asterism-pkcs11` + `asterism-dev-signer` + `SoftHSM2` to derive
+//! Uses `emvault-pkcs11` + `emvault-dev-signer` + `SoftHSM2` to derive
 //! real federation keys, build descriptors, and exercise the sweep
 //! planning logic with addresses derived from those descriptors.
 //!
 //! Tokens use the "core-test-{1..5}" label prefix — separate from
-//! the test-app-pkcs11 tokens and the asterism-pkcs11 integration tokens.
+//! the test-app-pkcs11 tokens and the emvault-pkcs11 integration tokens.
 //!
 //! ```bash
-//! cargo test -p asterism-core --features hsm-sweep-tests --test hsm_sweep -- --nocapture
+//! cargo test -p emvault-core --features hsm-sweep-tests --test hsm_sweep -- --nocapture
 //! ```
 
 #![cfg(feature = "hsm-sweep-tests")]
@@ -16,17 +16,17 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use asterism_core::descriptor::{KeyMode, to_multipath_string};
-use asterism_core::federation::Federation;
-use asterism_core::migration::{
+use emvault_core::descriptor::{KeyMode, to_multipath_string};
+use emvault_core::federation::Federation;
+use emvault_core::migration::{
     AccountForAccountBatchedSweep, AccountForAccountSweep, AccountUtxoSet, SweepAlgorithm,
     SweepOutput,
 };
-use asterism_core::network::NetworkType;
-use asterism_core::signer::{Signer, SignerCapabilities, SignerHealth, SignerId, SignerType};
-use asterism_core::{MigrationError, SignerError};
-use asterism_dev_signer::{DevBackend, DevConfig, init_dev_token};
-use asterism_pkcs11::{Pkcs11Config, Pkcs11Session, Pkcs11Signer, SlotIdentifier};
+use emvault_core::network::NetworkType;
+use emvault_core::signer::{Signer, SignerCapabilities, SignerHealth, SignerId, SignerType};
+use emvault_core::{MigrationError, SignerError};
+use emvault_dev_signer::{DevBackend, DevConfig, init_dev_token};
+use emvault_pkcs11::{Pkcs11Config, Pkcs11Session, Pkcs11Signer, SlotIdentifier};
 use bdk_wallet::chain::ChainPosition;
 use bdk_wallet::{KeychainKind, LocalOutput};
 use bitcoin::bip32::DerivationPath;
@@ -135,10 +135,10 @@ fn pkcs11_lib_path() -> PathBuf {
         return p;
     }
     let fallback = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../libasterism_dev_hsm/target/release/libasterism_dev_hsm.so");
+        .join("../libemvault_dev_hsm/target/release/libemvault_dev_hsm.so");
     assert!(
         fallback.exists(),
-        "libasterism_dev_hsm.so not found; build it first or set PKCS11_LIB"
+        "libemvault_dev_hsm.so not found; build it first or set PKCS11_LIB"
     );
     fallback
 }

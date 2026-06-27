@@ -1,8 +1,8 @@
-//! # asterism-core
+//! # emvault-core
 //!
 //! Core abstractions for the Emerald multi-signature custody platform.
 //!
-//! `asterism-core` provides the backend-agnostic cryptographic machinery for
+//! `emvault-core` provides the backend-agnostic cryptographic machinery for
 //! constructing, managing, and signing multi-signature Bitcoin transactions
 //! across heterogeneous signer backends. It is a pure library with no runtime,
 //! no network, and no persistent state of its own — it operates on stateful
@@ -13,8 +13,8 @@
 //!
 //! - [`Signer`] — the central trait representing "I know who this signer is and
 //!   what keys they control". Concrete implementations live in companion crates
-//!   ([`asterism-pkcs11`](https://docs.rs/asterism-pkcs11) for HSMs,
-//!   [`asterism-xpub`](https://docs.rs/asterism-xpub) for consumer hardware
+//!   ([`emvault-pkcs11`](https://docs.rs/emvault-pkcs11) for HSMs,
+//!   [`emvault-xpub`](https://docs.rs/emvault-xpub) for consumer hardware
 //!   wallets).
 //! - [`Federation`] — an m-of-n multi-signature group with mutation APIs
 //!   (`rotate_signer`, `add_signer`, `remove_signer`, `change_threshold`).
@@ -31,13 +31,13 @@
 //! ## A 20-line example: build a federation and derive an address
 //!
 //! ```ignore
-//! use asterism_core::{Federation, NetworkType, Signer};
+//! use emvault_core::{Federation, NetworkType, Signer};
 //! use bitcoin::Network;
 //!
 //! // Three signers come from companion crates: ExternalSigner from
-//! // asterism-xpub for consumer hardware wallets, Pkcs11Signer from
-//! // asterism-pkcs11 for HSMs. Both implement `asterism_core::Signer`.
-//! let alice: Box<dyn Signer> = /* ... build from asterism-xpub or asterism-pkcs11 ... */;
+//! // emvault-xpub for consumer hardware wallets, Pkcs11Signer from
+//! // emvault-pkcs11 for HSMs. Both implement `emvault_core::Signer`.
+//! let alice: Box<dyn Signer> = /* ... build from emvault-xpub or emvault-pkcs11 ... */;
 //! let bob:   Box<dyn Signer> = /* ... */;
 //! let carol: Box<dyn Signer> = /* ... */;
 //!
@@ -54,7 +54,7 @@
 //!
 //! ## Design priorities
 //!
-//! See `design_docs/asterism_multisignature_library.md` and `.cursorrules` for
+//! See `design_docs/emvault_multisignature_library.md` and `.cursorrules` for
 //! the full design rationale. The short version:
 //!
 //! 1. Developer ergonomics — common patterns are short, errors are specific.
@@ -73,7 +73,7 @@
 //! - `node-tests` — gates RPC-driven tests against an external `bitcoind`.
 //! - `elements` — adds the `NetworkType::Elements` variant and
 //!   `ElementsNetworkId` enum, consumed by the
-//!   [`asterism-elements`](https://docs.rs/asterism-elements) companion crate.
+//!   [`emvault-elements`](https://docs.rs/emvault-elements) companion crate.
 //!   No additional dependencies are pulled in by enabling this feature.
 
 #![warn(missing_docs)]
@@ -107,7 +107,7 @@ pub use test_utils::MockSigner;
 
 pub use descriptor::DescriptorBuilder;
 pub use error::{
-    AsterismError, DescriptorError, FederatedWalletError, FederationError, MigrationError,
+    EmVaultError, DescriptorError, FederatedWalletError, FederationError, MigrationError,
     PsbtError, RecoveryError, SignerError, SnapshotError,
 };
 pub use federated_wallet::{BtcFederatedWallet, FederatedWallet, FederationWallet};

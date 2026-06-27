@@ -1,13 +1,13 @@
-//! Address derivation tests for every descriptor shape Asterism produces.
+//! Address derivation tests for every descriptor shape EmVault produces.
 //!
 //! These tests are pure-local: they never touch a network or an HSM. They
 //! verify the chain of `Federation` -> `Descriptor` -> `Address` is sound and
 //! deterministic for Fixed wsh and Ranged wsh descriptors.
 //!
-//! Run with: `cargo test -p asterism-core --features test-utils --test address_derivation`.
+//! Run with: `cargo test -p emvault-core --features test-utils --test address_derivation`.
 #![cfg(feature = "test-utils")]
 
-use asterism_core::{
+use emvault_core::{
     Federation, FederationSnapshot, NetworkType, RecoveryTemplate, Signer, test_utils::MockSigner,
 };
 use bitcoin::secp256k1::Secp256k1;
@@ -115,7 +115,7 @@ fn fixed_mode_descriptor_script_pubkey_matches_address_script() {
 
 #[test]
 fn ranged_mode_yields_distinct_addresses_per_index() {
-    use asterism_core::descriptor::{DescriptorBuilder, KeyMode};
+    use emvault_core::descriptor::{DescriptorBuilder, KeyMode};
 
     let signers = typed_signers(&[1, 2, 3], Network::Testnet);
     let mut b =

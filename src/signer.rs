@@ -7,7 +7,7 @@
 //! ([`crate::SignerType::Software`]) sign locally.
 //!
 //! Concrete signing methods (`sign_psbt`) live on the per-backend types
-//! ([`asterism_pkcs11::Pkcs11Signer`](https://docs.rs/asterism-pkcs11/),
+//! ([`emvault_pkcs11::Pkcs11Signer`](https://docs.rs/emvault-pkcs11/),
 //! etc.), not on this trait.
 
 use std::fmt;

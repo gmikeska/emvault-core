@@ -1,7 +1,7 @@
-//! Error types for `asterism-core`.
+//! Error types for `emvault-core`.
 //!
 //! Each subsystem has its own [`thiserror`]-derived error enum. Cross-cutting
-//! callers can use [`AsterismError`] which `From`-converts every subsystem
+//! callers can use [`EmVaultError`] which `From`-converts every subsystem
 //! error.
 
 use bitcoin::Amount;
@@ -11,7 +11,7 @@ use crate::signer::SignerId;
 
 /// Top-level error type that aggregates every subsystem error.
 #[derive(Debug, thiserror::Error)]
-pub enum AsterismError {
+pub enum EmVaultError {
     /// Federation construction or mutation failed.
     #[error(transparent)]
     Federation(#[from] FederationError),

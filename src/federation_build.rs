@@ -10,7 +10,7 @@
 //! wallets, HSMs, …) builds federations the same way.
 
 use crate::descriptor::{KeyMode, to_multipath_string};
-use crate::error::{AsterismError, SnapshotError};
+use crate::error::{EmVaultError, SnapshotError};
 use crate::signer::Signer;
 use crate::{DescriptorBuilder, Federation, FederationSnapshot, NetworkType};
 
@@ -28,15 +28,15 @@ pub struct BuiltFederation {
 ///
 /// # Errors
 ///
-/// Returns [`AsterismError`] if [`DescriptorBuilder`] or [`Federation::new`]
+/// Returns [`EmVaultError`] if [`DescriptorBuilder`] or [`Federation::new`]
 /// rejects the inputs (duplicate xpub, network mismatch, threshold out of
-/// range — surfaced as [`AsterismError::Descriptor`] / [`AsterismError::Federation`]),
-/// or if the snapshot fails to serialise ([`AsterismError::Snapshot`]).
+/// range — surfaced as [`EmVaultError::Descriptor`] / [`EmVaultError::Federation`]),
+/// or if the snapshot fails to serialise ([`EmVaultError::Snapshot`]).
 pub fn build_federation<S: Signer>(
     signers: Vec<S>,
     threshold: u32,
     network: NetworkType,
-) -> Result<BuiltFederation, AsterismError> {
+) -> Result<BuiltFederation, EmVaultError> {
     let mut builder = DescriptorBuilder::new(threshold, network).key_mode(KeyMode::Ranged);
     for s in &signers {
         builder.add_signer(s)?;
