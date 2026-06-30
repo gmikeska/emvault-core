@@ -107,7 +107,7 @@ pub use test_utils::MockSigner;
 
 pub use descriptor::DescriptorBuilder;
 pub use error::{
-    EmVaultError, DescriptorError, FederatedWalletError, FederationError, MigrationError,
+    DescriptorError, EmVaultError, FederatedWalletError, FederationError, MigrationError,
     PsbtError, RecoveryError, SignerError, SnapshotError,
 };
 pub use federated_wallet::{BtcFederatedWallet, FederatedWallet, FederationWallet};

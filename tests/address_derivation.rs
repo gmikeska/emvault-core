@@ -7,11 +7,11 @@
 //! Run with: `cargo test -p emvault-core --features test-utils --test address_derivation`.
 #![cfg(feature = "test-utils")]
 
+use bitcoin::secp256k1::Secp256k1;
+use bitcoin::{Address, Network};
 use emvault_core::{
     Federation, FederationSnapshot, NetworkType, RecoveryTemplate, Signer, test_utils::MockSigner,
 };
-use bitcoin::secp256k1::Secp256k1;
-use bitcoin::{Address, Network};
 use miniscript::{Descriptor, DescriptorPublicKey};
 
 // ---------------------------------------------------------------------------

@@ -8,16 +8,16 @@
 //! `cargo test -p emvault-core --features test-utils`.
 #![cfg(feature = "test-utils")]
 
+use bitcoin::Network;
 use emvault_core::{
     Federation, FederationError, FederationSnapshot, NetworkType, RecoveryTemplate, Signer,
 };
-use bitcoin::Network;
 use proptest::prelude::*;
 
 mod harness {
+    use bitcoin::Network;
     use emvault_core::Signer;
     use emvault_core::test_utils::MockSigner;
-    use bitcoin::Network;
 
     pub fn make_signers(seeds: &[u64]) -> Vec<Box<dyn Signer>> {
         seeds

@@ -12,8 +12,8 @@
 //! ```
 #![cfg(all(feature = "test-utils", feature = "node-tests"))]
 
-use emvault_core::{Federation, NetworkType, Signer, test_utils::MockSigner};
 use bitcoin::Network;
+use emvault_core::{Federation, NetworkType, Signer, test_utils::MockSigner};
 use miniscript::{Descriptor, DescriptorPublicKey};
 
 mod common;

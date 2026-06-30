@@ -15,10 +15,10 @@
 
 use std::path::PathBuf;
 
-use emvault_core::chain_sync::{emitter_sync, init_or_load_wallet};
-use emvault_core::{NetworkType, build_federation, test_utils::MockSigner};
 use bitcoin::Network;
 use bitcoincore_rpc::{Auth, Client, RpcApi};
+use emvault_core::chain_sync::{emitter_sync, init_or_load_wallet};
+use emvault_core::{NetworkType, build_federation, test_utils::MockSigner};
 
 /// Best-effort load of `emvault-core/.env`. Does **not** override env vars
 /// already set in the process, so a runtime `BITCOIN_RPC_HOST` override (e.g.

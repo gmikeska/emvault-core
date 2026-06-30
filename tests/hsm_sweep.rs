@@ -16,6 +16,12 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use bdk_wallet::chain::ChainPosition;
+use bdk_wallet::{KeychainKind, LocalOutput};
+use bitcoin::bip32::DerivationPath;
+use bitcoin::bip32::{Fingerprint, Xpub};
+use bitcoin::hashes::Hash;
+use bitcoin::{Address, Amount, FeeRate, Network, OutPoint, Txid};
 use emvault_core::descriptor::{KeyMode, to_multipath_string};
 use emvault_core::federation::Federation;
 use emvault_core::migration::{
@@ -27,12 +33,6 @@ use emvault_core::signer::{Signer, SignerCapabilities, SignerHealth, SignerId, S
 use emvault_core::{MigrationError, SignerError};
 use emvault_dev_signer::{DevBackend, DevConfig, init_dev_token};
 use emvault_pkcs11::{Pkcs11Config, Pkcs11Session, Pkcs11Signer, SlotIdentifier};
-use bdk_wallet::chain::ChainPosition;
-use bdk_wallet::{KeychainKind, LocalOutput};
-use bitcoin::bip32::DerivationPath;
-use bitcoin::bip32::{Fingerprint, Xpub};
-use bitcoin::hashes::Hash;
-use bitcoin::{Address, Amount, FeeRate, Network, OutPoint, Txid};
 use serial_test::serial;
 
 // =========================================================================

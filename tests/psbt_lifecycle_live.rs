@@ -25,12 +25,12 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use emvault_core::chain_sync::emitter_sync;
-use emvault_core::psbt::{build_spend, finalize_and_extract};
 use bdk_wallet::{KeychainKind, SignOptions, Wallet};
 use bitcoin::bip32::Xpriv;
 use bitcoin::{Amount, FeeRate, Network};
 use bitcoincore_rpc::{Auth, Client, RpcApi};
+use emvault_core::chain_sync::emitter_sync;
+use emvault_core::psbt::{build_spend, finalize_and_extract};
 
 /// Best-effort load of `emvault-core/.env`. Does **not** override env vars
 /// already set in the process, so a runtime `BITCOIN_RPC_HOST` override (e.g.
