@@ -134,15 +134,15 @@ pub use snapshot::{FederatedWalletSnapshot, FederationSnapshot, SignerSnapshot};
 // paths (`emvault::core::bitcoin`, `…::bdk_wallet`, …) instead of pinning their
 // own versions, so the app can never compile against a mismatched major and end
 // up with two incompatible copies of the same type.
-/// Re-export of the [`bitcoin`] crate (addresses, `Psbt`, `Network`, amounts…).
-pub use bitcoin;
-/// Re-export of [`miniscript`] (descriptor parsing/derivation).
-pub use miniscript;
-/// Re-export of [`bdk_wallet`] (`Wallet`, `ChangeSet`, `KeychainKind`, signing).
-pub use bdk_wallet;
 /// Re-export of [`bdk_bitcoind_rpc`] (the chain-sync `Emitter`). Itself
 /// re-exports [`bitcoincore_rpc`], so that client is reachable via this path too.
 pub use bdk_bitcoind_rpc;
+/// Re-export of [`bdk_wallet`] (`Wallet`, `ChangeSet`, `KeychainKind`, signing).
+pub use bdk_wallet;
+/// Re-export of the [`bitcoin`] crate (addresses, `Psbt`, `Network`, amounts…).
+pub use bitcoin;
 /// Re-export of [`bitcoincore_rpc`] (RPC `Client`/`RpcApi`/`Error`; also the
 /// generic `call` path used for Elements-only RPCs).
 pub use bitcoincore_rpc;
+/// Re-export of [`miniscript`] (descriptor parsing/derivation).
+pub use miniscript;
