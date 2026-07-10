@@ -98,6 +98,7 @@ pub mod recovery;
 pub mod roster;
 pub mod signer;
 pub mod snapshot;
+pub mod verify;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
@@ -126,6 +127,10 @@ pub use signer::{
     DeviceType, Signer, SignerCapabilities, SignerHealth, SignerId, SignerType, TransportType,
 };
 pub use snapshot::{FederatedWalletSnapshot, FederationSnapshot, SignerSnapshot};
+pub use verify::{
+    descriptors_match, ensure_descriptor_string_matches, ensure_descriptors_match,
+    multisig_policy, verify_psbt_outputs, ExpectedOutput, MultisigPolicy,
+};
 
 // ── Canonical chain-stack crates ────────────────────────────────────────────
 // These re-exports are the single source of truth for the third-party crates

@@ -116,6 +116,17 @@ pub enum DescriptorError {
     /// A descriptor public key conversion failed.
     #[error("descriptor key conversion failed: {0}")]
     KeyConversion(String),
+    /// The descriptor is not the expected `wsh(sortedmulti(m, …))` shape, so
+    /// its multisig policy cannot be extracted for comparison. Raised by
+    /// [`crate::verify::multisig_policy`].
+    #[error("descriptor is not wsh(sortedmulti(...)): {0}")]
+    UnsupportedShape(String),
+    /// Two descriptors describe different multisig policies — a differing
+    /// threshold or a differing cosigner-key set. Raised by
+    /// [`crate::verify::ensure_descriptors_match`]; the message names the
+    /// exact divergence (extra/missing keys or the threshold delta).
+    #[error("descriptor policy mismatch: {0}")]
+    PolicyMismatch(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +146,12 @@ pub enum PsbtError {
     /// The PSBT did not match the federation's descriptor.
     #[error("PSBT does not match federation descriptor: {0}")]
     DescriptorMismatch(String),
+    /// A PSBT's outputs do not correspond to the approved proposal — an
+    /// approved output is missing, a recipient amount was tampered, or an
+    /// unexpected (potential exfiltration) output was injected. Raised by
+    /// [`crate::verify::verify_psbt_outputs`].
+    #[error("PSBT outputs do not match approved proposal: {0}")]
+    OutputMismatch(String),
     /// A signature returned from an external signer did not validate.
     #[error("invalid signature from signer {0}: {1}")]
     InvalidSignature(SignerId, String),
