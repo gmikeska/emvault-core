@@ -19,6 +19,11 @@ elements = []
 # Integration tests that exercise sweep algorithms with real HSM-backed
 # signers (emvault-pkcs11 + emvault-dev-signer + SoftHSM2).
 hsm-sweep-tests = []
+# Nodeless Esplora HTTP chain backend: `esplora_sync` (a sibling to the
+# bitcoind-RPC `emitter_sync`) + `esplora_broadcast`, via the `esplora-rs`
+# client. Enables sync/broadcast without a local `bitcoind` (e.g. serverless
+# deploys). Async; pulls reqwest/tokio only when enabled.
+esplora = ["dep:esplora-rs"]
 
 [dependencies]
 bdk_wallet = "3.1.0"
@@ -27,6 +32,9 @@ bdk_wallet = "3.1.0"
 bdk_bitcoind_rpc = "0.22"
 bitcoincore-rpc = "0.19"
 bitcoin = "0.32.10"
+# Optional Esplora HTTP client for the `esplora` chain backend (feature-gated).
+# Bitcoin-agnostic (String DTOs) → no `bitcoin`/bdk version-conflict risk.
+esplora-rs = { version = "0.1", optional = true }
 hex = "0.4.3"
 miniscript = "12.3.7"
 serde = "1.0.228"
