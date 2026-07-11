@@ -1,6 +1,6 @@
 # emvault-core
 
-Core abstractions for the Emerald multi-signature custody platform: the
+Core abstractions for the EmVault multi-signature custody platform: the
 `Signer` trait, the `Federation` type, descriptor construction, the PSBT
 signing pipeline, recovery templates, and snapshots.
 
@@ -14,6 +14,13 @@ top of it. The [`emvault`](https://github.com/gmikeska/emvault) umbrella crate
 re-exports the whole family behind feature gates.
 
 [EmVault]: https://github.com/gmikeska/emvault
+
+## Install
+
+```toml
+[dependencies]
+emvault-core = "0.2"
+```
 
 ## Design priorities
 
@@ -35,12 +42,14 @@ In order, this crate optimizes for:
 | Module                       | Purpose                                            |
 | ---------------------------- | -------------------------------------------------- |
 | [`signer`](src/signer.rs)    | `Signer` trait + identity types                    |
-| [`network`](src/network.rs)  | `NetworkType` (Bitcoin only in v1, `#[non_exhaustive]`) |
+| [`network`](src/network.rs)  | `NetworkType` (Bitcoin; `Elements` behind the `elements` feature, `#[non_exhaustive]`) |
 | [`federation`](src/federation.rs) | `Federation<S>` + immutable mutation APIs     |
 | [`federation_build`](src/federation_build.rs) | `build_federation` — canonical descriptor + snapshot from a signer set |
 | [`descriptor`](src/descriptor.rs) | `wsh(sortedmulti(...))` builder              |
 | [`federated_wallet`](src/federated_wallet.rs) | `BtcFederatedWallet` — version-aware federated wallet |
 | [`psbt`](src/psbt.rs)        | `UnsignedPsbt` / `FinalizedPsbt`, `SigningCoordinator` |
+| [`chain_sync`](src/chain_sync.rs) | Bitcoin Core `Emitter` drive loop for chain sync |
+| [`verify`](src/verify.rs)    | Descriptor / PSBT-output verification (`descriptors_match`, `verify_psbt_outputs`, `MultisigPolicy`) |
 | [`roster`](src/roster.rs)    | Pure roster arithmetic for migrations (add/remove/threshold) |
 | [`recovery`](src/recovery.rs) | `RecoveryTemplate` with per-software instructions |
 | [`snapshot`](src/snapshot.rs) | Canonical-JSON federation export/import          |
@@ -164,6 +173,8 @@ vars are missing or the node is unreachable.
 | ------------- | ------- | --------------------------------------------------------------------- |
 | `test-utils`  | off     | Re-exports `MockSigner` for downstream test suites.                   |
 | `node-tests`  | off     | Enables the `node_cross_check` integration tests against `bitcoind`.  |
+| `elements`    | off     | Adds Elements/Liquid discriminant variants to `NetworkType` (the pipeline lives in `emvault-elements`). |
+| `hsm-sweep-tests` | off | Integration tests exercising sweep algorithms with real HSM-backed signers (`emvault-pkcs11` + `emvault-dev-signer` + SoftHSM2). |
 
 ## License
 

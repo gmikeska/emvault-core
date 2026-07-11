@@ -1,6 +1,6 @@
 //! # emvault-core
 //!
-//! Core abstractions for the Emerald multi-signature custody platform.
+//! Core abstractions for the EmVault multi-signature custody platform.
 //!
 //! `emvault-core` provides the backend-agnostic cryptographic machinery for
 //! constructing, managing, and signing multi-signature Bitcoin transactions
