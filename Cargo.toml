@@ -23,7 +23,7 @@ hsm-sweep-tests = []
 # bitcoind-RPC `emitter_sync`) + `esplora_broadcast`, via the `esplora-rs`
 # client. Enables sync/broadcast without a local `bitcoind` (e.g. serverless
 # deploys). Async; pulls reqwest/tokio only when enabled.
-esplora = ["dep:esplora-rs"]
+esplora = ["dep:esplora-rs", "dep:futures"]
 
 [dependencies]
 bdk_wallet = "3.1.0"
@@ -35,6 +35,8 @@ bitcoin = "0.32.10"
 # Optional Esplora HTTP client for the `esplora` chain backend (feature-gated).
 # Bitcoin-agnostic (String DTOs) → no `bitcoin`/bdk version-conflict risk.
 esplora-rs = { version = "0.1", optional = true }
+# Bounded-concurrency (`buffer_unordered`) for the incremental Esplora scan.
+futures = { version = "0.3", optional = true }
 hex = "0.4.3"
 miniscript = "12.3.7"
 serde = "1.0.228"

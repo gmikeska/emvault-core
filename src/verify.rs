@@ -137,10 +137,7 @@ pub fn ensure_descriptors_match(
 
     let mut reasons = Vec::new();
     if want.threshold != got.threshold {
-        reasons.push(format!(
-            "threshold {} != {}",
-            want.threshold, got.threshold
-        ));
+        reasons.push(format!("threshold {} != {}", want.threshold, got.threshold));
     }
     let extra: Vec<&String> = got.keys.difference(&want.keys).collect();
     let missing: Vec<&String> = want.keys.difference(&got.keys).collect();
@@ -302,7 +299,7 @@ mod tests {
     use crate::descriptor::{DescriptorBuilder, KeyMode};
     use crate::network::NetworkType;
     use crate::test_utils::MockSigner;
-    use bitcoin::{transaction::Version, Network, OutPoint, Sequence, Transaction, TxIn, TxOut};
+    use bitcoin::{Network, OutPoint, Sequence, Transaction, TxIn, TxOut, transaction::Version};
 
     fn desc_from(seeds: &[u64], threshold: u32) -> Descriptor<DescriptorPublicKey> {
         let signers: Vec<MockSigner> = seeds
@@ -366,8 +363,10 @@ mod tests {
 
     #[test]
     fn ranged_mode_policy_extractable_and_matches() {
-        let signers: Vec<MockSigner> =
-            [1u64, 2, 3].iter().map(|s| MockSigner::with_seed(*s, Network::Testnet)).collect();
+        let signers: Vec<MockSigner> = [1u64, 2, 3]
+            .iter()
+            .map(|s| MockSigner::with_seed(*s, Network::Testnet))
+            .collect();
         let mk = || {
             let mut b = DescriptorBuilder::new(2, NetworkType::Bitcoin(Network::Testnet))
                 .key_mode(KeyMode::Ranged);
@@ -400,8 +399,10 @@ mod tests {
 
     fn spk(byte: u8) -> ScriptBuf {
         // A distinct, valid-enough scriptPubKey for output comparison.
-        ScriptBuf::from_bytes(vec![0x00, 0x14, byte, byte, byte, byte, byte, byte, byte, byte,
-            byte, byte, byte, byte, byte, byte, byte, byte, byte, byte, byte, byte])
+        ScriptBuf::from_bytes(vec![
+            0x00, 0x14, byte, byte, byte, byte, byte, byte, byte, byte, byte, byte, byte, byte,
+            byte, byte, byte, byte, byte, byte, byte, byte,
+        ])
     }
 
     fn psbt_with_outputs(outs: &[(ScriptBuf, Amount)]) -> Psbt {

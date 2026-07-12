@@ -29,12 +29,21 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bdk_wallet::chain::local_chain::CannotConnectError;
-use bdk_wallet::chain::spk_client::FullScanResponse;
+use bdk_wallet::chain::spk_client::{FullScanResponse, SyncResponse};
 use bdk_wallet::chain::{BlockId, ConfirmationBlockTime, TxUpdate};
 use bdk_wallet::{KeychainKind, Wallet};
 
 use bitcoin::consensus::encode::{deserialize, serialize_hex};
 use bitcoin::{Amount, BlockHash, Network, OutPoint, ScriptBuf, Transaction, TxOut, Txid};
+
+use futures::StreamExt;
+
+/// Max in-flight Esplora requests during the concurrent incremental scan.
+const SCAN_CONCURRENCY: usize = 8;
+/// Extra unrevealed indices probed past the last revealed one during an
+/// incremental sync (mirrors a node index's lookahead — catches the next few
+/// addresses before they're formally revealed).
+const INCREMENTAL_LOOKAHEAD: u32 = 5;
 
 use crate::chain_sync::SyncResult;
 
@@ -146,16 +155,42 @@ impl EsploraBackend {
 /// [`emitter_sync`](crate::chain_sync::emitter_sync), so persistence is
 /// identical across backends.
 ///
-/// This performs a gap-limited full scan of the wallet's keychains on each call
-/// (stateless and always correct; an incremental fast-path is a later
-/// optimization). The caller merges [`SyncResult::changeset`] into its
-/// aggregate and persists it.
+/// A wallet's **first** sync does a full gap-limit scan ([`esplora_rescan`]) to
+/// discover history; **subsequent** syncs take a fast, concurrent incremental
+/// path over only the already-revealed address range. The caller merges
+/// [`SyncResult::changeset`] into its aggregate and persists it.
 ///
 /// # Errors
 /// [`EsploraSyncError::Http`] on request failure, [`EsploraSyncError::Malformed`]
 /// if Esplora returns an unparseable value, or [`EsploraSyncError::CannotConnect`]
 /// if the update can't attach to the wallet's local chain.
 pub async fn esplora_sync(
+    wallet: &mut Wallet,
+    backend: &EsploraBackend,
+) -> Result<SyncResult, EsploraSyncError> {
+    // First sync (fresh wallet, only the genesis checkpoint) → full gap-limit
+    // scan to discover history. Steady state → cheap, concurrent incremental
+    // sync over only the already-revealed address range. This mirrors the
+    // bitcoind `Emitter` backend, which likewise tracks revealed SPKs from the
+    // last checkpoint rather than re-deriving from index 0 each poll — so the
+    // two chain backends stay interchangeable behind the same `SyncResult`.
+    if wallet.latest_checkpoint().height() == 0 {
+        esplora_rescan(wallet, backend).await
+    } else {
+        esplora_incremental(wallet, backend).await
+    }
+}
+
+/// Full gap-limit scan of every keychain — derives SPKs from index 0 until a
+/// gap of unused addresses, discovering history on **unrevealed** indices.
+/// Used automatically on a wallet's first sync, and as the explicit "rescan"
+/// entry point. Sequential (it's a one-time cost; correctness over speed).
+///
+/// Returns the same [`SyncResult`] as [`esplora_sync`].
+///
+/// # Errors
+/// See [`esplora_sync`].
+pub async fn esplora_rescan(
     wallet: &mut Wallet,
     backend: &EsploraBackend,
 ) -> Result<SyncResult, EsploraSyncError> {
@@ -221,6 +256,129 @@ pub async fn esplora_sync(
         chain_update: Some(cp),
     };
 
+    wallet.apply_update(response)?;
+    let changeset = wallet.take_staged();
+    let final_tip = wallet.latest_checkpoint().height();
+
+    Ok(SyncResult {
+        changeset,
+        blocks_synced: 0,
+        new_mempool_txs,
+        tip_height: final_tip,
+    })
+}
+
+/// Incremental sync: re-check only the wallet's already-revealed address range
+/// (plus a small [`INCREMENTAL_LOOKAHEAD`]), fetching all addresses
+/// **concurrently** (bounded by [`SCAN_CONCURRENCY`]). The fast, steady-state
+/// path — no unbounded gap walk, no re-derivation from index 0. New funds sent
+/// to as-yet-unrevealed indices are picked up on the next [`esplora_rescan`].
+///
+/// Returns the same [`SyncResult`] as [`esplora_sync`].
+///
+/// # Errors
+/// See [`esplora_sync`].
+async fn esplora_incremental(
+    wallet: &mut Wallet,
+    backend: &EsploraBackend,
+) -> Result<SyncResult, EsploraSyncError> {
+    let client = backend.client();
+    let start_time = now_secs();
+    let base_cp = wallet.latest_checkpoint();
+
+    // Bounded target set: indices 0..=revealed(+lookahead) per keychain. Peek is
+    // read-only, so collect the address strings before any `&mut` borrow.
+    let mut targets: Vec<String> = Vec::new();
+    for keychain in [KeychainKind::External, KeychainKind::Internal] {
+        let last = wallet.derivation_index(keychain).unwrap_or(0);
+        let hi = last.saturating_add(INCREMENTAL_LOOKAHEAD);
+        for index in 0..=hi {
+            targets.push(wallet.peek_address(keychain, index).address.to_string());
+        }
+    }
+
+    // Fetch each address's history concurrently (bounded in-flight).
+    let per_address: Vec<Vec<esplora_rs::Transaction>> =
+        futures::stream::iter(targets.iter().map(|addr| async move {
+            if address_is_active(client, addr).await? {
+                fetch_address_txs(client, addr).await
+            } else {
+                Ok(Vec::new())
+            }
+        }))
+        .buffer_unordered(SCAN_CONCURRENCY)
+        .collect::<Vec<Result<Vec<esplora_rs::Transaction>, EsploraSyncError>>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Dedupe to the unique Esplora transactions touching the wallet.
+    let mut seen = BTreeSet::<Txid>::new();
+    let mut unique: Vec<esplora_rs::Transaction> = Vec::new();
+    for list in per_address {
+        for tx in list {
+            let txid = convert::txid(&tx.txid)?;
+            if seen.insert(txid) {
+                unique.push(tx);
+            }
+        }
+    }
+
+    // Fetch each unique tx's raw bytes concurrently.
+    let raw_txs: Vec<Transaction> = futures::stream::iter(unique.iter().map(|tx| async move {
+        let raw = client.get_tx_hex(&tx.txid).await?;
+        convert::tx(&raw)
+    }))
+    .buffer_unordered(SCAN_CONCURRENCY)
+    .collect::<Vec<Result<Transaction, EsploraSyncError>>>()
+    .await
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
+
+    // Assemble the update (in-memory).
+    let mut tx_update = TxUpdate::<ConfirmationBlockTime>::default();
+    let mut anchor_blocks = BTreeSet::<BlockId>::new();
+    let mut new_mempool_txs = 0u32;
+    for tx in raw_txs {
+        tx_update.txs.push(Arc::new(tx));
+    }
+    for tx in &unique {
+        let txid = convert::txid(&tx.txid)?;
+        for vin in &tx.vin {
+            if let Some(prevout) = &vin.prevout {
+                let outpoint = OutPoint {
+                    txid: convert::txid(&vin.txid)?,
+                    vout: vin.vout,
+                };
+                tx_update.txouts.insert(outpoint, convert::txout(prevout)?);
+            }
+        }
+        if tx.status.confirmed {
+            if let Some(anchor) = convert::anchor(&tx.status)? {
+                anchor_blocks.insert(anchor.block_id);
+                tx_update.anchors.insert((anchor, txid));
+            }
+        } else if tx_update.seen_ats.insert((txid, start_time)) {
+            new_mempool_txs = new_mempool_txs.saturating_add(1);
+        }
+    }
+
+    // Chain update: extend the checkpoint with anchor blocks + the fresh tip.
+    let tip_height = u32::try_from(client.get_tip_height().await?).unwrap_or(u32::MAX);
+    let tip_hash = convert::block_hash(&client.get_tip_hash().await?)?;
+    let mut cp = base_cp;
+    for block in anchor_blocks {
+        cp = cp.insert(block);
+    }
+    cp = cp.insert(BlockId {
+        height: tip_height,
+        hash: tip_hash,
+    });
+
+    let response = SyncResponse {
+        tx_update,
+        chain_update: Some(cp),
+    };
     wallet.apply_update(response)?;
     let changeset = wallet.take_staged();
     let final_tip = wallet.latest_checkpoint().height();
