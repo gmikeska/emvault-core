@@ -36,10 +36,6 @@ use bdk_wallet::{KeychainKind, Wallet};
 use bitcoin::consensus::encode::{deserialize, serialize_hex};
 use bitcoin::{Amount, BlockHash, Network, OutPoint, ScriptBuf, Transaction, TxOut, Txid};
 
-use futures::StreamExt;
-
-/// Max in-flight Esplora requests during the concurrent incremental scan.
-const SCAN_CONCURRENCY: usize = 8;
 /// Extra unrevealed indices probed past the last revealed one during an
 /// incremental sync (mirrors a node index's lookahead — catches the next few
 /// addresses before they're formally revealed).
@@ -297,26 +293,19 @@ async fn esplora_incremental(
         }
     }
 
-    // Fetch each address's history concurrently (bounded in-flight).
-    let per_address: Vec<Vec<esplora_rs::Transaction>> =
-        futures::stream::iter(targets.iter().map(|addr| async move {
-            if address_is_active(client, addr).await? {
-                fetch_address_txs(client, addr).await
-            } else {
-                Ok(Vec::new())
-            }
-        }))
-        .buffer_unordered(SCAN_CONCURRENCY)
-        .collect::<Vec<Result<Vec<esplora_rs::Transaction>, EsploraSyncError>>>()
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Dedupe to the unique Esplora transactions touching the wallet.
+    // Fetch each revealed address's history, then dedupe to the unique Esplora
+    // transactions touching the wallet. Sequential: the scan only covers the
+    // already-revealed range (not a full gap walk), and staying off
+    // `buffer_unordered` keeps this future `for<'a> Send` — which an async
+    // request handler awaiting this sync requires. Concurrency lives in the
+    // waterfalls path instead.
     let mut seen = BTreeSet::<Txid>::new();
     let mut unique: Vec<esplora_rs::Transaction> = Vec::new();
-    for list in per_address {
-        for tx in list {
+    for addr in &targets {
+        if !address_is_active(client, addr).await? {
+            continue;
+        }
+        for tx in fetch_address_txs(client, addr).await? {
             let txid = convert::txid(&tx.txid)?;
             if seen.insert(txid) {
                 unique.push(tx);
@@ -324,16 +313,12 @@ async fn esplora_incremental(
         }
     }
 
-    // Fetch each unique tx's raw bytes concurrently.
-    let raw_txs: Vec<Transaction> = futures::stream::iter(unique.iter().map(|tx| async move {
+    // Fetch each unique tx's raw bytes (sequential; same Send rationale).
+    let mut raw_txs: Vec<Transaction> = Vec::with_capacity(unique.len());
+    for tx in &unique {
         let raw = client.get_tx_hex(&tx.txid).await?;
-        convert::tx(&raw)
-    }))
-    .buffer_unordered(SCAN_CONCURRENCY)
-    .collect::<Vec<Result<Transaction, EsploraSyncError>>>()
-    .await
-    .into_iter()
-    .collect::<Result<Vec<_>, _>>()?;
+        raw_txs.push(convert::tx(&raw)?);
+    }
 
     // Assemble the update (in-memory).
     let mut tx_update = TxUpdate::<ConfirmationBlockTime>::default();
