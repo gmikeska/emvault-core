@@ -376,6 +376,115 @@ async fn esplora_incremental(
     })
 }
 
+/// Extra derivation indices scanned past the last revealed one on the waterfalls
+/// path (the server-side `to_index`). Mirrors [`EsploraSyncOpts::gap_limit`]'s
+/// role, but the whole range is covered in a single descriptor query.
+const WATERFALLS_GAP: u32 = 20;
+
+/// Sync `wallet` via the **`QuickSync` / Waterfalls** descriptor-scan endpoint:
+/// one `get_waterfalls_all` call per keychain returns that keychain's entire
+/// per-index history, so the whole wallet is discovered in **~2 descriptor
+/// queries + one fetch per unique tx** instead of the address-by-address gap walk
+/// in [`esplora_rescan`]. Returns the same [`SyncResult`] as
+/// [`esplora_sync`], so persistence is identical across backends.
+///
+/// Requires a host that serves waterfalls (e.g. `enterprise.blockstream.info/
+/// <chain>/api`, authenticated). The descriptor is sent to that server, so this
+/// is a dev/staging chain source, not for descriptor-private production.
+///
+/// # Errors
+/// See [`esplora_sync`].
+pub async fn esplora_waterfalls_sync(
+    wallet: &mut Wallet,
+    backend: &EsploraBackend,
+) -> Result<SyncResult, EsploraSyncError> {
+    let client = backend.client();
+    let start_time = now_secs();
+    let base_cp = wallet.latest_checkpoint();
+
+    let mut tx_update = TxUpdate::<ConfirmationBlockTime>::default();
+    let mut last_active_indices = BTreeMap::<KeychainKind, u32>::new();
+    let mut fetched = BTreeSet::<Txid>::new();
+    let mut anchor_blocks = BTreeSet::<BlockId>::new();
+    let mut new_mempool_txs = 0u32;
+
+    for keychain in [KeychainKind::External, KeychainKind::Internal] {
+        // The keychain's single-path public descriptor (e.g. `wsh(...)/0/*#cks`).
+        let descriptor = wallet.public_descriptor(keychain).to_string();
+        let revealed = wallet.derivation_index(keychain).unwrap_or(0);
+        let to_index = revealed.saturating_add(WATERFALLS_GAP);
+
+        let resp = client.get_waterfalls_all(descriptor, to_index).await?;
+        // `txs_seen` is keyed by descriptor; the outer Vec index is the
+        // derivation index and the inner Vec holds that index's sightings.
+        // Collect the txids into an owned list *before* any await, so no
+        // response-borrowing iterator is held across `.await` (that trips the
+        // "Send is not general enough" HRTB bound in async request handlers).
+        let mut txids: Vec<String> = Vec::new();
+        for per_index in resp.txs_seen.values() {
+            for (index, sightings) in per_index.iter().enumerate() {
+                if sightings.is_empty() {
+                    continue;
+                }
+                let index = u32::try_from(index).unwrap_or(u32::MAX);
+                let entry = last_active_indices.entry(keychain).or_insert(index);
+                *entry = (*entry).max(index);
+                txids.extend(sightings.iter().map(|s| s.txid.clone()));
+            }
+        }
+        drop(resp);
+
+        for txid_str in txids {
+            let txid = convert::txid(&txid_str)?;
+            if fetched.contains(&txid) {
+                continue;
+            }
+            // Waterfalls gives txids only; fetch the full tx for its inputs'
+            // prevouts (fees) + confirmation status, then fold it in exactly like
+            // the address-scan path.
+            let tx = client.get_tx(&txid_str).await?;
+            ingest_tx(
+                client,
+                &tx,
+                start_time,
+                &mut tx_update,
+                &mut fetched,
+                &mut anchor_blocks,
+                &mut new_mempool_txs,
+            )
+            .await?;
+        }
+    }
+
+    // Chain update: extend the checkpoint with anchor blocks + the fresh tip.
+    let tip_height = u32::try_from(client.get_tip_height().await?).unwrap_or(u32::MAX);
+    let tip_hash = convert::block_hash(&client.get_tip_hash().await?)?;
+    let mut cp = base_cp;
+    for block in anchor_blocks {
+        cp = cp.insert(block);
+    }
+    cp = cp.insert(BlockId {
+        height: tip_height,
+        hash: tip_hash,
+    });
+
+    let response = FullScanResponse::<KeychainKind> {
+        tx_update,
+        last_active_indices,
+        chain_update: Some(cp),
+    };
+    wallet.apply_update(response)?;
+    let changeset = wallet.take_staged();
+    let final_tip = wallet.latest_checkpoint().height();
+
+    Ok(SyncResult {
+        changeset,
+        blocks_synced: 0,
+        new_mempool_txs,
+        tip_height: final_tip,
+    })
+}
+
 /// Broadcast a fully-signed transaction through the Esplora backend and return
 /// its txid. Required where no local node is available (e.g. serverless).
 ///
