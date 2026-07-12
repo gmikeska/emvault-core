@@ -52,3 +52,12 @@ dotenvy = "0.15.7"
 emvault-pkcs11 = { path = "../emvault-pkcs11" }
 emvault-dev-signer = { path = "../emvault-dev-signer" }
 serial_test = "3.5.0"
+# Async runtime + JSON/hex helpers for the gated live-signet esplora tests.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+serde_json = "1"
+hex = "0.4"
+
+# Dev-only (D8): build/test against local esplora-rs (the fixed `broadcast_tx`
+# + logging) until 0.1.1 is published. Remove before publishing emvault-core.
+[patch.crates-io]
+esplora-rs = { path = "../../esplora-rs" }

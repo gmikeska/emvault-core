@@ -1,6 +1,6 @@
 //! # emvault-core
 //!
-//! Core abstractions for the EmVault multi-signature custody platform.
+//! Core abstractions for the `EmVault` multi-signature custody platform.
 //!
 //! `emvault-core` provides the backend-agnostic cryptographic machinery for
 //! constructing, managing, and signing multi-signature Bitcoin transactions
@@ -88,6 +88,8 @@
 pub mod chain_sync;
 pub mod descriptor;
 pub mod error;
+#[cfg(feature = "esplora")]
+pub mod esplora_sync;
 pub mod federated_wallet;
 pub mod federation;
 pub mod federation_build;
@@ -128,8 +130,8 @@ pub use signer::{
 };
 pub use snapshot::{FederatedWalletSnapshot, FederationSnapshot, SignerSnapshot};
 pub use verify::{
-    descriptors_match, ensure_descriptor_string_matches, ensure_descriptors_match,
-    multisig_policy, verify_psbt_outputs, ExpectedOutput, MultisigPolicy,
+    ExpectedOutput, MultisigPolicy, descriptors_match, ensure_descriptor_string_matches,
+    ensure_descriptors_match, multisig_policy, verify_psbt_outputs,
 };
 
 // ── Canonical chain-stack crates ────────────────────────────────────────────
