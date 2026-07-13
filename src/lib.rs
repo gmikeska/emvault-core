@@ -75,6 +75,11 @@
 //!   `ElementsNetworkId` enum, consumed by the
 //!   [`emvault-elements`](https://docs.rs/emvault-elements) companion crate.
 //!   No additional dependencies are pulled in by enabling this feature.
+//! - `esplora` — pulls in the
+//!   [`emvault-esplora`](https://docs.rs/emvault-esplora) companion crate (a
+//!   nodeless Esplora + Waterfalls chain backend) and re-exports it as
+//!   `emvault_core::esplora`, with a `From<EsploraSyncResult>` for
+//!   [`chain_sync::SyncResult`].
 
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]

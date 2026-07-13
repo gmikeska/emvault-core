@@ -19,7 +19,7 @@ re-exports the whole family behind feature gates.
 
 ```toml
 [dependencies]
-emvault-core = "0.2"
+emvault-core = "0.3"
 ```
 
 ## Design priorities
@@ -48,7 +48,7 @@ In order, this crate optimizes for:
 | [`descriptor`](src/descriptor.rs) | `wsh(sortedmulti(...))` builder              |
 | [`federated_wallet`](src/federated_wallet.rs) | `BtcFederatedWallet` — version-aware federated wallet |
 | [`psbt`](src/psbt.rs)        | `UnsignedPsbt` / `FinalizedPsbt`, `SigningCoordinator` |
-| [`chain_sync`](src/chain_sync.rs) | Bitcoin Core `Emitter` drive loop for chain sync |
+| [`chain_sync`](src/chain_sync.rs) | Bitcoin Core `Emitter` drive loop for chain sync (nodeless Esplora/Waterfalls alternative via the `esplora` feature → `emvault_core::esplora`) |
 | [`verify`](src/verify.rs)    | Descriptor / PSBT-output verification (`descriptors_match`, `verify_psbt_outputs`, `MultisigPolicy`) |
 | [`roster`](src/roster.rs)    | Pure roster arithmetic for migrations (add/remove/threshold) |
 | [`recovery`](src/recovery.rs) | `RecoveryTemplate` with per-software instructions |
@@ -175,6 +175,7 @@ vars are missing or the node is unreachable.
 | `node-tests`  | off     | Enables the `node_cross_check` integration tests against `bitcoind`.  |
 | `elements`    | off     | Adds Elements/Liquid discriminant variants to `NetworkType` (the pipeline lives in `emvault-elements`). |
 | `hsm-sweep-tests` | off | Integration tests exercising sweep algorithms with real HSM-backed signers (`emvault-pkcs11` + `emvault-dev-signer` + SoftHSM2). |
+| `esplora`     | off     | Pulls in the [`emvault-esplora`](https://github.com/gmikeska/emvault-esplora) companion crate — a nodeless **Esplora + Waterfalls** chain backend — and re-exports it as `emvault_core::esplora` (plus `From<EsploraSyncResult> for chain_sync::SyncResult`). |
 
 ## License
 
