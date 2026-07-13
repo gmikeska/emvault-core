@@ -136,6 +136,21 @@ pub struct SyncResult {
     pub tip_height: u32,
 }
 
+/// Adapt an [`emvault_esplora::EsploraSyncResult`] into the shared
+/// [`SyncResult`], so the nodeless Esplora/Waterfalls backend drops into the
+/// exact same seam as [`emitter_sync`]. The fields are identical by design.
+#[cfg(feature = "esplora")]
+impl From<emvault_esplora::EsploraSyncResult> for SyncResult {
+    fn from(r: emvault_esplora::EsploraSyncResult) -> Self {
+        Self {
+            changeset: r.changeset,
+            blocks_synced: r.blocks_synced,
+            new_mempool_txs: r.new_mempool_txs,
+            tip_height: r.tip_height,
+        }
+    }
+}
+
 /// Errors raised while driving the chain-sync emitter.
 #[derive(Debug, thiserror::Error)]
 pub enum ChainSyncError {

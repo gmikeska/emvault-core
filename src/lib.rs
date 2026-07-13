@@ -128,8 +128,8 @@ pub use signer::{
 };
 pub use snapshot::{FederatedWalletSnapshot, FederationSnapshot, SignerSnapshot};
 pub use verify::{
-    descriptors_match, ensure_descriptor_string_matches, ensure_descriptors_match,
-    multisig_policy, verify_psbt_outputs, ExpectedOutput, MultisigPolicy,
+    ExpectedOutput, MultisigPolicy, descriptors_match, ensure_descriptor_string_matches,
+    ensure_descriptors_match, multisig_policy, verify_psbt_outputs,
 };
 
 // ── Canonical chain-stack crates ────────────────────────────────────────────
@@ -149,5 +149,10 @@ pub use bitcoin;
 /// Re-export of [`bitcoincore_rpc`] (RPC `Client`/`RpcApi`/`Error`; also the
 /// generic `call` path used for Elements-only RPCs).
 pub use bitcoincore_rpc;
+/// Re-export of the nodeless Esplora + Waterfalls backend (`EsploraBackend`,
+/// `SyncMode`, `EsploraSyncResult`, …), behind the `esplora` feature. Its
+/// [`chain_sync::SyncResult`] `From` impl lets it share the emitter seam.
+#[cfg(feature = "esplora")]
+pub use emvault_esplora as esplora;
 /// Re-export of [`miniscript`] (descriptor parsing/derivation).
 pub use miniscript;
