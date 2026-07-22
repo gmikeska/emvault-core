@@ -23,11 +23,18 @@ hsm-sweep-tests = []
 # companion crate (which owns the `esplora-rs` dep) and re-exports it as
 # `emvault_core::esplora`, plus a `From<EsploraSyncResult> for SyncResult`.
 esplora = ["dep:emvault-esplora"]
+# Descriptor-private Electrum chain backend. Pulls in the `emvault-electrum`
+# companion crate (electrs/Electrum over `bdk_electrum`) and re-exports it as
+# `emvault_core::electrum`, plus a `From<ElectrumSyncResult> for SyncResult`.
+electrum = ["dep:emvault-electrum"]
 
 [dependencies]
 # Optional: nodeless Esplora/Waterfalls backend, behind the `esplora` feature.
 # Path/patch until published (see emvault-esplora/docs/design/integration-design.md).
 emvault-esplora = { version = "0.3.0", path = "../../emvault-esplora", optional = true }
+# Optional: descriptor-private Electrum backend, behind the `electrum` feature.
+# Path until published (mirrors the emvault-esplora arrangement).
+emvault-electrum = { version = "0.1.0", path = "../../emvault-electrum", optional = true }
 bdk_wallet = "3.1.0"
 # Bitcoin Core RPC chain-sync: the `Emitter` drive loop in `chain_sync` (E3b),
 # shared by both consuming apps. `bitcoincore-rpc` supplies the `RpcApi` bound.

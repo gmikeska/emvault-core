@@ -151,6 +151,21 @@ impl From<emvault_esplora::EsploraSyncResult> for SyncResult {
     }
 }
 
+/// Adapt an [`emvault_electrum::ElectrumSyncResult`] into the shared
+/// [`SyncResult`], so the descriptor-private Electrum backend drops into the
+/// exact same seam as [`emitter_sync`]. The fields are identical by design.
+#[cfg(feature = "electrum")]
+impl From<emvault_electrum::ElectrumSyncResult> for SyncResult {
+    fn from(r: emvault_electrum::ElectrumSyncResult) -> Self {
+        Self {
+            changeset: r.changeset,
+            blocks_synced: r.blocks_synced,
+            new_mempool_txs: r.new_mempool_txs,
+            tip_height: r.tip_height,
+        }
+    }
+}
+
 /// Errors raised while driving the chain-sync emitter.
 #[derive(Debug, thiserror::Error)]
 pub enum ChainSyncError {

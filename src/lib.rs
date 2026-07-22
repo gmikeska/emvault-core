@@ -159,5 +159,10 @@ pub use bitcoincore_rpc;
 /// [`chain_sync::SyncResult`] `From` impl lets it share the emitter seam.
 #[cfg(feature = "esplora")]
 pub use emvault_esplora as esplora;
+/// Re-export of the descriptor-private Electrum backend (`ElectrumBackend`,
+/// `ElectrumSyncResult`, `WatchPool`, …), behind the `electrum` feature. Its
+/// [`chain_sync::SyncResult`] `From` impl lets it share the emitter seam.
+#[cfg(feature = "electrum")]
+pub use emvault_electrum as electrum;
 /// Re-export of [`miniscript`] (descriptor parsing/derivation).
 pub use miniscript;
