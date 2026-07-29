@@ -51,6 +51,10 @@ thiserror = "2.0.18"
 uuid = { version = "1.23", features = ["v4"] }
 
 [dev-dependencies]
+# `test-utils` exposes bdk_wallet's wallet/tx-graph fixtures (insert_tx / insert_anchor
+# / insert_checkpoint / receive_output) used by the reorg-detector unit tests in
+# `chain_sync`. Dev-only; the non-test build keeps the plain `bdk_wallet` dep above.
+bdk_wallet = { version = "3.1.0", features = ["test-utils"] }
 proptest = "1.11.0"
 rand = "0.10.1"
 ureq = { version = "2.10", features = ["json"] }

@@ -259,9 +259,76 @@ pub fn emitter_sync<R: RpcApi>(wallet: &mut Wallet, rpc: &R) -> Result<SyncResul
         blocks_synced = blocks_synced.saturating_add(1);
     }
 
+    // Reorg-below-tip that the emitter *absorbed* without a `CannotConnect`.
+    // When the reorg's fork point is still a checkpoint in the wallet's local
+    // chain — the common case for a warm, long-lived wallet that synced
+    // block-by-block and so retained the ancestor block as a checkpoint — the
+    // emitter rolls back to it and re-emits the replacement blocks cleanly;
+    // `apply_block_connected_to` reconnects through the shared ancestor and never
+    // errors. bdk updates the local chain but leaves the reorged-out tx's now-stale
+    // anchor in the tx graph: the tx canonicalizes as unconfirmed yet its outputs
+    // still float as pending (a phantom UTXO), and no `reorg_rebuilt` signal is
+    // raised. `CannotConnect` fires *only* when the fork point is below every
+    // checkpoint the wallet holds (the sparse / freshly-bootstrapped case), so the
+    // `Err(CannotConnect)` arm above misses every warm wallet.
+    //
+    // Detect the absorbed reorg by two complementary signals and route either
+    // through the *same* from-scratch rebuild as the `CannotConnect` path. This
+    // makes P0 ("every backend's sync leaves the wallet at post-reorg ground
+    // truth") hold for warm wallets too: `reorg_rebuilt: true` + `evicted_txids`
+    // are returned, the app persists a replace (clearing the phantom), and
+    // app-side reconciliation is armed.
+    //
+    // 1. **Same-pass demotion** — a tx that was confirmed before this pass and is
+    //    no longer confirmed (its anchor block fell out of the canonical chain).
+    //    Fires when the reorg is absorbed *within this very sync*.
+    //
+    // 2. **Orphaned anchor** ([`has_orphaned_anchor`]) — a tx-graph anchor whose
+    //    block is absent from the wallet's own (now-canonical) local chain. This
+    //    is the signal that survives a **reload**: once the phantom is persisted,
+    //    the reorged-out tx canonicalizes as unconfirmed the instant the changeset
+    //    loads, so `before`/`after` are identical and signal 1 is blind forever.
+    //    Signal 2 keys on the stale anchor bdk retains (it never GCs anchors), so
+    //    a wallet that already baked in reorg damage still self-heals on its next
+    //    sync — the production miss this guards against. Signal 2 is a strict
+    //    superset of signal 1; signal 1 is kept as a cheap, proven first check.
+    //
+    // No false positives — only a reorg demotes an already-confirmed tx or strands
+    // an anchor off-chain — and D5 is preserved because `rebuild_on_reorg`'s
+    // eviction set is "absent *anywhere*", so a sweep merely re-queued into the
+    // mempool is not counted as evicted.
+    let after_confirmed = confirmed_txids(wallet);
+    let demoted = before_confirmed
+        .iter()
+        .any(|txid| !after_confirmed.contains(txid));
+    if demoted || has_orphaned_anchor(wallet) {
+        return rebuild_on_reorg(wallet, rpc, &before_confirmed);
+    }
+
     let mempool = emitter.mempool().map_err(ChainSyncError::Rpc)?;
     let new_mempool_txs = u32::try_from(mempool.update.len()).unwrap_or(u32::MAX);
+    // The fresh emitter (built with `NO_EXPECTED_MEMPOOL_TXS`) emits the node's
+    // *entire* current mempool in `update`, so this is the full mempool txid set.
+    let mempool_txids: HashSet<Txid> = mempool
+        .update
+        .iter()
+        .map(|(tx, _)| tx.compute_txid())
+        .collect();
     wallet.apply_unconfirmed_txs(mempool.update);
+
+    // Stale unconfirmed float — the second reorg-phantom mode (see
+    // [`has_stale_unconfirmed`]). A migration sweep is marked `complete`
+    // optimistically at broadcast, so a successor version can hold the sweep as an
+    // *unconfirmed* tx (never anchored). If the reorg then evicts the sweep's
+    // parent, the sweep is gone from the node — not confirmed, not in the mempool —
+    // yet bdk keeps it in the graph (it never evicts unconfirmed txs on its own).
+    // `has_orphaned_anchor` cannot see it (it was never anchored), so it needs its
+    // own signal: route it through the same rebuild so the phantom is cleared and
+    // lineage reconciliation is armed. Without this the successor's stale float
+    // reads as a phantom balance and wrongly blocks the migration revert.
+    if has_stale_unconfirmed(wallet, &mempool_txids) {
+        return rebuild_on_reorg(wallet, rpc, &before_confirmed);
+    }
 
     let tip_height = wallet.latest_checkpoint().height();
     let changeset = wallet.take_staged();
@@ -376,4 +443,131 @@ fn confirmed_txids(wallet: &Wallet) -> HashSet<Txid> {
         .filter(|wtx| matches!(wtx.chain_position, ChainPosition::Confirmed { .. }))
         .map(|wtx| wtx.tx_node.txid)
         .collect()
+}
+
+/// `true` when the wallet's tx graph holds an anchor whose block is **absent from
+/// the wallet's own local chain** — the frozen fingerprint of a reorg that dropped
+/// a previously-applied block.
+///
+/// A healthy wallet only anchors txs to blocks it applied to its local chain, so
+/// every anchor resolves to a matching checkpoint. When a reorg rewrites history,
+/// bdk updates the local chain to the canonical branch but **retains the stale
+/// anchor** (it never garbage-collects anchors), leaving the reorged-out tx
+/// pointing at a block the chain no longer contains. This is the one reorg signal
+/// that survives a **reload**: after the phantom is persisted, the tx canonicalizes
+/// as unconfirmed the instant the changeset loads, so a same-pass
+/// confirmed→unconfirmed diff sees nothing — but the orphaned anchor is still there.
+///
+/// Purely local (no RPC): the wallet's post-sync local chain already reflects the
+/// node's canonical branch, so "anchor block not in local chain" == "anchor block
+/// reorged out". `rebuild_on_reorg` heals it (a fresh from-genesis scan carries no
+/// stale anchors) and the app's persist-**replace** on `reorg_rebuilt` makes the
+/// heal durable, so this returns `false` on every subsequent sync (idempotent).
+fn has_orphaned_anchor(wallet: &Wallet) -> bool {
+    let chain = wallet.local_chain();
+    wallet
+        .tx_graph()
+        .all_anchors()
+        .values()
+        .flatten()
+        .any(|cbt| chain.get(cbt.block_id.height).map(|cp| cp.hash()) != Some(cbt.block_id.hash))
+}
+
+/// `true` when the wallet's canonical view holds an **unconfirmed** transaction
+/// that is absent from the node's current mempool (and never confirmed) — the
+/// second reorg-phantom mode, complementary to [`has_orphaned_anchor`].
+///
+/// A tx enters the wallet as unconfirmed only via a mempool snapshot, so in steady
+/// state every unconfirmed tx is still in the mempool. One drops out of the mempool
+/// without confirming exactly when it is evicted — its parent was reorged out or
+/// double-spent (a migration sweep whose funding was replaced is the case here).
+/// bdk never evicts unconfirmed txs on its own, so the sweep lingers as a phantom.
+/// `mempool_txids` is the node's **full** current mempool (the fresh emitter emits
+/// every mempool tx in its `update`), so "unconfirmed in the wallet yet absent from
+/// the node" is precisely D5's "absent entirely" — route it through a rebuild.
+///
+/// No steady-state false positives: a freshly-broadcast tx sits in the node's own
+/// mempool, so it stays in `mempool_txids`. A tx that just confirmed reads as
+/// `Confirmed`, not `Unconfirmed`. Worst case is a benign extra rebuild if a block
+/// lands in the window between the block drive and the mempool fetch — self-clearing
+/// on the next sync, never a loop.
+fn has_stale_unconfirmed(wallet: &Wallet, mempool_txids: &HashSet<Txid>) -> bool {
+    wallet.transactions().any(|wtx| {
+        matches!(wtx.chain_position, ChainPosition::Unconfirmed { .. })
+            && !mempool_txids.contains(&wtx.tx_node.txid)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    //! Deterministic unit coverage for the two reorg-detection signals, built with
+    //! bdk's tx-graph fixtures so no live node is needed. The live integration
+    //! proofs (`test-app-xpub`'s reorg e2es) exercise the same signals end-to-end.
+    use super::*;
+    use bdk_wallet::chain::BlockId;
+    use bdk_wallet::chain::ConfirmationBlockTime;
+    use bdk_wallet::test_utils::{
+        ReceiveTo, get_funded_wallet_single, get_test_wpkh, insert_checkpoint, receive_output,
+    };
+    use bitcoin::hashes::Hash;
+    use bitcoin::{Amount, BlockHash};
+
+    fn block(height: u32, byte: u8) -> BlockId {
+        BlockId {
+            height,
+            hash: BlockHash::from_byte_array([byte; 32]),
+        }
+    }
+
+    #[test]
+    fn stale_unconfirmed_flags_only_evicted_floats() {
+        let (mut wallet, _) = get_funded_wallet_single(get_test_wpkh());
+        // A confirmed funding tx is never flagged — it is not `Unconfirmed`.
+        assert!(!has_stale_unconfirmed(&wallet, &HashSet::new()));
+
+        // Receive an unconfirmed output — a sweep floating in the mempool.
+        let op = receive_output(
+            &mut wallet,
+            Amount::from_sat(10_000),
+            ReceiveTo::Mempool(1_000),
+        );
+
+        // Still in the node's mempool → present, not stale.
+        let live: HashSet<Txid> = [op.txid].into_iter().collect();
+        assert!(!has_stale_unconfirmed(&wallet, &live));
+
+        // Absent from the mempool (evicted, never confirmed) → stale float.
+        assert!(has_stale_unconfirmed(&wallet, &HashSet::new()));
+    }
+
+    #[test]
+    fn orphaned_anchor_flags_reorged_out_anchor() {
+        let (mut wallet, _) = get_funded_wallet_single(get_test_wpkh());
+        // Healthy: every anchor resolves to a matching checkpoint.
+        assert!(!has_orphaned_anchor(&wallet));
+
+        // Extend the chain to height 500_000 (hash X) and anchor a tx there.
+        let x = block(500_000, 0x11);
+        insert_checkpoint(&mut wallet, x);
+        let _ = receive_output(
+            &mut wallet,
+            Amount::from_sat(10_000),
+            ReceiveTo::Block(ConfirmationBlockTime {
+                block_id: x,
+                confirmation_time: 0,
+            }),
+        );
+        assert!(
+            !has_orphaned_anchor(&wallet),
+            "anchor block is in the local chain"
+        );
+
+        // Reorg: replace height 500_000 with a different hash (evicts X and any
+        // later blocks), stranding the tx's anchor off-chain.
+        insert_checkpoint(&mut wallet, block(500_000, 0x22));
+        assert!(
+            has_orphaned_anchor(&wallet),
+            "the tx's anchor block was reorged out of the local chain"
+        );
+    }
 }
