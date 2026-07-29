@@ -1,6 +1,6 @@
 //! # emvault-core
 //!
-//! Core abstractions for the EmVault multi-signature custody platform.
+//! Core abstractions for the `EmVault` multi-signature custody platform.
 //!
 //! `emvault-core` provides the backend-agnostic cryptographic machinery for
 //! constructing, managing, and signing multi-signature Bitcoin transactions
@@ -154,15 +154,15 @@ pub use bitcoin;
 /// Re-export of [`bitcoincore_rpc`] (RPC `Client`/`RpcApi`/`Error`; also the
 /// generic `call` path used for Elements-only RPCs).
 pub use bitcoincore_rpc;
-/// Re-export of the nodeless Esplora + Waterfalls backend (`EsploraBackend`,
-/// `SyncMode`, `EsploraSyncResult`, …), behind the `esplora` feature. Its
-/// [`chain_sync::SyncResult`] `From` impl lets it share the emitter seam.
-#[cfg(feature = "esplora")]
-pub use emvault_esplora as esplora;
 /// Re-export of the descriptor-private Electrum backend (`ElectrumBackend`,
 /// `ElectrumSyncResult`, `WatchPool`, …), behind the `electrum` feature. Its
 /// [`chain_sync::SyncResult`] `From` impl lets it share the emitter seam.
 #[cfg(feature = "electrum")]
 pub use emvault_electrum as electrum;
+/// Re-export of the nodeless Esplora + Waterfalls backend (`EsploraBackend`,
+/// `SyncMode`, `EsploraSyncResult`, …), behind the `esplora` feature. Its
+/// [`chain_sync::SyncResult`] `From` impl lets it share the emitter seam.
+#[cfg(feature = "esplora")]
+pub use emvault_esplora as esplora;
 /// Re-export of [`miniscript`] (descriptor parsing/derivation).
 pub use miniscript;

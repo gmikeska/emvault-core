@@ -58,3 +58,6 @@ dotenvy = "0.15.7"
 emvault-pkcs11 = { path = "../emvault-pkcs11" }
 emvault-dev-signer = { path = "../emvault-dev-signer" }
 serial_test = "3.5.0"
+# Runtime for the async electrum backend in the cross-backend reorg parity test
+# (`tests/reorg_cross_backend_live.rs`, gated behind the `electrum` feature + env).
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

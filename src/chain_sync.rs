@@ -25,10 +25,13 @@
 //! calls); call it from a `spawn_blocking` context in async code. It does not
 //! persist (Foible 7). The optional async wrapper is deferred to E5f.
 
+use std::collections::HashSet;
+
 use bdk_bitcoind_rpc::{Emitter, NO_EXPECTED_MEMPOOL_TXS};
+use bdk_wallet::chain::ChainPosition;
 use bdk_wallet::chain::local_chain::ApplyHeaderError;
-use bdk_wallet::{ChangeSet, Wallet};
-use bitcoin::Network;
+use bdk_wallet::{ChangeSet, KeychainKind, Wallet};
+use bitcoin::{Network, Txid};
 use bitcoincore_rpc::RpcApi;
 use serde_json::Value;
 
@@ -134,6 +137,23 @@ pub struct SyncResult {
     pub new_mempool_txs: u32,
     /// The wallet's chain tip after the sync, in blocks.
     pub tip_height: u32,
+    /// Txids that were **confirmed** in the wallet's graph before this pass but are
+    /// **absent entirely** from the chain after it (reorged/evicted out — not merely
+    /// demoted to mempool). Empty on a normal forward sync; only populated on the
+    /// reorg-rebuild path. The consuming app unions these across all wallets it syncs
+    /// to drive migration reconcile.
+    ///
+    /// The bitcoind-RPC [`emitter_sync`] populates this the same way the nodeless
+    /// backends do: [`bdk_bitcoind_rpc::Emitter`] surfaces a reorg-below-tip as a
+    /// [`ApplyHeaderError::CannotConnect`], which `emitter_sync` catches and recovers
+    /// from by rebuilding the wallet's graph from genesis (D2/D3), then reports the
+    /// evicted set as confirmed-before minus present-anywhere-after (D5).
+    pub evicted_txids: Vec<Txid>,
+    /// `true` when this pass detected a reorg below the persisted tip and rebuilt the
+    /// wallet's tx graph from scratch. When `true`, `changeset` is the **complete**
+    /// rebuilt changeset and the app must **replace** its persisted aggregate, not
+    /// merge it (a merge would re-introduce the reorged-out phantom UTXO).
+    pub reorg_rebuilt: bool,
 }
 
 /// Adapt an [`emvault_esplora::EsploraSyncResult`] into the shared
@@ -147,6 +167,8 @@ impl From<emvault_esplora::EsploraSyncResult> for SyncResult {
             blocks_synced: r.blocks_synced,
             new_mempool_txs: r.new_mempool_txs,
             tip_height: r.tip_height,
+            evicted_txids: r.evicted_txids,
+            reorg_rebuilt: r.reorg_rebuilt,
         }
     }
 }
@@ -162,6 +184,8 @@ impl From<emvault_electrum::ElectrumSyncResult> for SyncResult {
             blocks_synced: r.blocks_synced,
             new_mempool_txs: r.new_mempool_txs,
             tip_height: r.tip_height,
+            evicted_txids: r.evicted_txids,
+            reorg_rebuilt: r.reorg_rebuilt,
         }
     }
 }
@@ -172,8 +196,10 @@ pub enum ChainSyncError {
     /// A bitcoind RPC call failed.
     #[error("bitcoind RPC error during sync")]
     Rpc(#[source] bitcoincore_rpc::Error),
-    /// An emitted block couldn't be connected to the wallet's local chain
-    /// (usually a reorg below the last persisted tip).
+    /// An emitted block couldn't be connected to the wallet's local chain for a
+    /// reason other than a reorg-below-tip (a reorg-below-tip is caught and
+    /// recovered by rebuilding — see [`emitter_sync`]). In practice this is
+    /// [`ApplyHeaderError::InconsistentBlocks`].
     #[error("failed to apply block at height {height}")]
     ApplyBlock {
         /// Height of the block that failed to connect.
@@ -182,6 +208,10 @@ pub enum ChainSyncError {
         #[source]
         source: ApplyHeaderError,
     },
+    /// A reorg-below-tip was detected (via [`ApplyHeaderError::CannotConnect`]) but
+    /// rebuilding the wallet's graph from its descriptors failed.
+    #[error("failed to rebuild wallet after reorg: {0}")]
+    Rebuild(String),
 }
 
 /// Drive [`bdk_bitcoind_rpc::Emitter`] against `rpc` until `wallet` matches
@@ -199,6 +229,10 @@ pub enum ChainSyncError {
 /// [`ChainSyncError::Rpc`] on RPC failure; [`ChainSyncError::ApplyBlock`] if
 /// an emitted block can't be connected to the wallet's local chain.
 pub fn emitter_sync<R: RpcApi>(wallet: &mut Wallet, rpc: &R) -> Result<SyncResult, ChainSyncError> {
+    // Snapshot the confirmed-txid set *before* any mutation — the eviction baseline
+    // used only if this pass turns into a reorg rebuild (D5).
+    let before_confirmed = confirmed_txids(wallet);
+
     let cp = wallet.latest_checkpoint();
     let start_height = cp.height();
     let mut emitter = Emitter::new(rpc, cp, start_height, NO_EXPECTED_MEMPOOL_TXS);
@@ -207,9 +241,21 @@ pub fn emitter_sync<R: RpcApi>(wallet: &mut Wallet, rpc: &R) -> Result<SyncResul
     while let Some(block_event) = emitter.next_block().map_err(ChainSyncError::Rpc)? {
         let height = block_event.block_height();
         let connected_to = block_event.connected_to();
-        wallet
-            .apply_block_connected_to(&block_event.block, height, connected_to)
-            .map_err(|source| ChainSyncError::ApplyBlock { height, source })?;
+        match wallet.apply_block_connected_to(&block_event.block, height, connected_to) {
+            Ok(()) => {}
+            // A reorg below the persisted tip: the emitter reaches a block that
+            // cannot connect to the wallet's stale local chain. The nodeless backends
+            // reorg silently and leave a phantom UTXO; the emitter instead *errors*
+            // here (`live_reorg.rs` / `reorg_rpc_live.rs` prove both). Either way the
+            // only correct recovery is a from-scratch rebuild (D3), so we do it here
+            // and return the same `evicted_txids` + `reorg_rebuilt` shape as electrum
+            // / esplora — making P0 ("every backend's sync leaves the wallet at
+            // post-reorg ground truth") hold for all three.
+            Err(ApplyHeaderError::CannotConnect(_)) => {
+                return rebuild_on_reorg(wallet, rpc, &before_confirmed);
+            }
+            Err(source) => return Err(ChainSyncError::ApplyBlock { height, source }),
+        }
         blocks_synced = blocks_synced.saturating_add(1);
     }
 
@@ -225,5 +271,109 @@ pub fn emitter_sync<R: RpcApi>(wallet: &mut Wallet, rpc: &R) -> Result<SyncResul
         blocks_synced,
         new_mempool_txs,
         tip_height,
+        // Normal forward sync: nothing evicted, no rebuild.
+        evicted_txids: Vec::new(),
+        reorg_rebuilt: false,
     })
+}
+
+/// Reorg-recovery rebuild for the bitcoind-RPC path (decisions D2/D3/D5), the
+/// analog of `emvault-electrum`'s `ElectrumBackend::rebuild_on_reorg`. Reconstructs
+/// the wallet's tx graph from scratch by re-driving the emitter **from genesis**
+/// against the post-reorg chain — the only operation that clears the reorged-out
+/// phantom — and **replaces** the caller's wallet in place (D2).
+///
+/// Unlike the electrum/esplora `full_scan` (which self-discovers used addresses via
+/// a gap limit), the bitcoind emitter only indexes txouts for **revealed** SPKs, so
+/// we first reveal the fresh wallet up to the live wallet's derivation indices.
+/// Otherwise a confirmed UTXO that *survived* the reorg would be silently dropped.
+///
+/// `evicted_txids` = confirmed-before minus present-anywhere in the rebuilt graph
+/// (D5: absent *entirely*, so a re-queued mempool tx is not evicted). The returned
+/// `changeset` is the **complete** rebuilt changeset with `reorg_rebuilt: true`; the
+/// app must persist it as a **replace**, not a merge.
+fn rebuild_on_reorg<R: RpcApi>(
+    wallet: &mut Wallet,
+    rpc: &R,
+    before_confirmed: &HashSet<Txid>,
+) -> Result<SyncResult, ChainSyncError> {
+    // Rebuild from the live wallet's own public (watch-only) descriptors — a
+    // scan-equivalent wallet. Signing keys are intentionally not carried; the app
+    // re-registers signers after a rebuild (it does so on every load).
+    let ext = wallet.public_descriptor(KeychainKind::External).clone();
+    let int = wallet.public_descriptor(KeychainKind::Internal).clone();
+    let reveal_ext = wallet.derivation_index(KeychainKind::External);
+    let reveal_int = wallet.derivation_index(KeychainKind::Internal);
+    let network = wallet.network();
+
+    let mut fresh = Wallet::create(ext, int)
+        .network(network)
+        .create_wallet_no_persist()
+        .map_err(|e| ChainSyncError::Rebuild(e.to_string()))?;
+
+    // Reveal SPKs *before* the scan so the emitter can match historical outputs to
+    // the same address range the live wallet had handed out (emitter matches only
+    // revealed SPKs — see fn docs).
+    if let Some(idx) = reveal_ext {
+        let _ = fresh
+            .reveal_addresses_to(KeychainKind::External, idx)
+            .count();
+    }
+    if let Some(idx) = reveal_int {
+        let _ = fresh
+            .reveal_addresses_to(KeychainKind::Internal, idx)
+            .count();
+    }
+
+    // Drive the emitter from genesis (the fresh wallet's checkpoint) against the
+    // post-reorg chain.
+    let cp = fresh.latest_checkpoint();
+    let start_height = cp.height();
+    let mut emitter = Emitter::new(rpc, cp, start_height, NO_EXPECTED_MEMPOOL_TXS);
+    let mut blocks_synced = 0u32;
+    while let Some(block_event) = emitter.next_block().map_err(ChainSyncError::Rpc)? {
+        let height = block_event.block_height();
+        let connected_to = block_event.connected_to();
+        fresh
+            .apply_block_connected_to(&block_event.block, height, connected_to)
+            .map_err(|source| ChainSyncError::ApplyBlock { height, source })?;
+        blocks_synced = blocks_synced.saturating_add(1);
+    }
+    let mempool = emitter.mempool().map_err(ChainSyncError::Rpc)?;
+    let new_mempool_txs = u32::try_from(mempool.update.len()).unwrap_or(u32::MAX);
+    fresh.apply_unconfirmed_txs(mempool.update);
+
+    // evicted = confirmed-before − present-anywhere-after (D5).
+    let after_all: HashSet<Txid> = fresh.transactions().map(|wtx| wtx.tx_node.txid).collect();
+    let mut evicted_txids: Vec<Txid> = before_confirmed
+        .iter()
+        .filter(|txid| !after_all.contains(*txid))
+        .copied()
+        .collect();
+    evicted_txids.sort_unstable(); // deterministic order for the app/audit trail
+
+    let tip_height = fresh.latest_checkpoint().height();
+
+    // Swap in the rebuilt wallet (D2: the backend replaces the wallet).
+    *wallet = fresh;
+
+    Ok(SyncResult {
+        changeset: wallet.take_staged(),
+        blocks_synced,
+        new_mempool_txs,
+        tip_height,
+        evicted_txids,
+        reorg_rebuilt: true,
+    })
+}
+
+/// The set of txids the wallet's graph currently considers **confirmed**. Snapshot
+/// before the sync to form the eviction baseline (a reorg demotes/evicts the
+/// reorged-out tx, so a post-rebuild read would miss it).
+fn confirmed_txids(wallet: &Wallet) -> HashSet<Txid> {
+    wallet
+        .transactions()
+        .filter(|wtx| matches!(wtx.chain_position, ChainPosition::Confirmed { .. }))
+        .map(|wtx| wtx.tx_node.txid)
+        .collect()
 }

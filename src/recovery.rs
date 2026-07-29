@@ -2,7 +2,7 @@
 //!
 //! A recovery template captures everything needed to reconstruct a federation
 //! and its address space using third-party wallet software, without requiring
-//! the EmVault platform to be online. Templates include:
+//! the `EmVault` platform to be online. Templates include:
 //!
 //! - The output descriptor (with origin metadata and `#checksum`).
 //! - Threshold and signer count.
