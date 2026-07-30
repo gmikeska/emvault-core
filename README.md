@@ -19,7 +19,7 @@ re-exports the whole family behind feature gates.
 
 ```toml
 [dependencies]
-emvault-core = "0.3"
+emvault-core = "0.6"
 ```
 
 ## Design priorities
@@ -48,7 +48,7 @@ In order, this crate optimizes for:
 | [`descriptor`](src/descriptor.rs) | `wsh(sortedmulti(...))` builder              |
 | [`federated_wallet`](src/federated_wallet.rs) | `BtcFederatedWallet` — version-aware federated wallet |
 | [`psbt`](src/psbt.rs)        | `UnsignedPsbt` / `FinalizedPsbt`, `SigningCoordinator` |
-| [`chain_sync`](src/chain_sync.rs) | Bitcoin Core `Emitter` drive loop for chain sync (nodeless Esplora/Waterfalls alternative via the `esplora` feature → `emvault_core::esplora`) |
+| [`chain_sync`](src/chain_sync.rs) | Bitcoin Core `Emitter` drive loop for chain sync (nodeless Esplora/Waterfalls alternative via the `esplora` feature → `emvault_core::esplora`); `SyncResult` carries the reorg-reconciliation signals (`evicted_txids`, `reorg_rebuilt`) — see [Reorg reconciliation](#reorg-reconciliation) |
 | [`verify`](src/verify.rs)    | Descriptor / PSBT-output verification (`descriptors_match`, `verify_psbt_outputs`, `MultisigPolicy`) |
 | [`roster`](src/roster.rs)    | Pure roster arithmetic for migrations (add/remove/threshold) |
 | [`recovery`](src/recovery.rs) | `RecoveryTemplate` with per-software instructions |
@@ -139,6 +139,35 @@ fresh `Federation`. Funds do not move automatically — the consuming app uses
 inside a `FederationMigration` to plan the actual transfer of UTXOs to the new
 federation.
 
+## Reorg reconciliation
+
+A confirmed migration sweep can lose its confirmation to a chain reorg. The
+sync layer surfaces the two signals a consuming app needs to *reconcile* that —
+i.e. revert a migration it had marked `complete` back to `pending` without ever
+double-counting or losing funds — via [`chain_sync::SyncResult`](src/chain_sync.rs):
+
+- **`evicted_txids: Vec<Txid>`** — txids that were **confirmed before** this sync
+  pass but are **absent entirely** from the chain after it (reorged/evicted out,
+  not merely demoted to the mempool). An app unions these across every wallet in
+  a federation lineage; if a version's recorded sweep txid lands in the union,
+  that migration's on-chain settlement is gone → revert it to `pending` (the
+  funds are preserved on the pre-migration version).
+- **`reorg_rebuilt: bool`** — `true` when the pass detected a reorg **below** the
+  persisted tip and rebuilt the wallet's tx graph from genesis. When set,
+  `changeset` is the **complete** rebuilt graph and the app must **replace** its
+  persisted aggregate, not merge it (merging would re-introduce the reorged-out
+  phantom UTXO).
+
+`chain_sync::emitter_sync` (the Bitcoin Core RPC path) produces these directly:
+a reorg-below-tip surfaces as [`ApplyHeaderError::CannotConnect`], which it
+catches and recovers from by rebuilding from genesis (decisions D2/D3), then
+reports the evicted set as *confirmed-before minus present-anywhere-after* (D5).
+The nodeless backends behind the `esplora` / `electrum` features expose
+`From<…SyncResult> for chain_sync::SyncResult`, so **every backend feeds the same
+reconciliation seam**. (The migration *revert* + funds-preserving *re-sweep*
+policy itself is the consuming app's — see the `test-app-*` `FEATURES.md` — built
+on these signals plus the `migration` sweep engine.)
+
 ## Recovery templates
 
 `RecoveryTemplate::from_federation(...)` produces a self-contained artifact
@@ -176,6 +205,7 @@ vars are missing or the node is unreachable.
 | `elements`    | off     | Adds Elements/Liquid discriminant variants to `NetworkType` (the pipeline lives in `emvault-elements`). |
 | `hsm-sweep-tests` | off | Integration tests exercising sweep algorithms with real HSM-backed signers (`emvault-pkcs11` + `emvault-dev-signer` + SoftHSM2). |
 | `esplora`     | off     | Pulls in the [`emvault-esplora`](https://github.com/gmikeska/emvault-esplora) companion crate — a nodeless **Esplora + Waterfalls** chain backend — and re-exports it as `emvault_core::esplora` (plus `From<EsploraSyncResult> for chain_sync::SyncResult`). |
+| `electrum`    | off     | Pulls in the [`emvault-electrum`](https://github.com/gmikeska/emvault-electrum) companion crate — a **descriptor-private** electrs/Electrum chain backend (sync/broadcast + a scripthash watch layer) — and re-exports it as `emvault_core::electrum` (plus `From<ElectrumSyncResult> for chain_sync::SyncResult`). |
 
 ## License
 
