@@ -4,6 +4,8 @@ Core abstractions for the EmVault multi-signature custody platform: the
 `Signer` trait, the `Federation` type, descriptor construction, the PSBT
 signing pipeline, recovery templates, and snapshots.
 
+See the [CHANGELOG](https://github.com/gmikeska/emvault-core/blob/master/CHANGELOG.md) for release notes.
+
 `emvault-core` is the foundation crate of the [EmVault] library family. It
 is the only crate every EmVault consumer depends on; the backend crates
 ([`emvault-pkcs11`](https://github.com/gmikeska/emvault-pkcs11),
