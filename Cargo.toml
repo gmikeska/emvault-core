@@ -1,6 +1,6 @@
 [package]
 name = "emvault-core"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 description = "Core abstractions for the EmVault multi-signature custody platform: Signer trait, Federation, descriptor builder, PSBT pipeline, and recovery."
 license = "MIT OR Apache-2.0"
@@ -31,10 +31,10 @@ electrum = ["dep:emvault-electrum"]
 [dependencies]
 # Optional: nodeless Esplora/Waterfalls backend, behind the `esplora` feature.
 # Path/patch until published (see emvault-esplora/docs/design/integration-design.md).
-emvault-esplora = { version = "0.6.0", path = "../../emvault-esplora", optional = true }
+emvault-esplora = { version = "0.7.0", path = "../../emvault-esplora", optional = true }
 # Optional: descriptor-private Electrum backend, behind the `electrum` feature.
 # Path until published (mirrors the emvault-esplora arrangement).
-emvault-electrum = { version = "0.6.0", path = "../../emvault-electrum", optional = true }
+emvault-electrum = { version = "0.7.0", path = "../../emvault-electrum", optional = true }
 bdk_wallet = "3.1.0"
 # Bitcoin Core RPC chain-sync: the `Emitter` drive loop in `chain_sync` (E3b),
 # shared by both consuming apps. `bitcoincore-rpc` supplies the `RpcApi` bound.

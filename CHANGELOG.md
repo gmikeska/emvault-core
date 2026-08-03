@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > Entries for 0.5.0 and earlier were reconstructed from git history.
 
+## [0.7.0] - 2026-08-03
+
+### Changed
+- Released in lockstep with the suite-wide v0.7.0 update; no functional changes
+  to `emvault-core` itself.
+- The re-exported nodeless chain backends gained a `tip_height()` / `get_tx()`
+  surface, available through the `esplora` and `electrum` features — see the
+  `emvault-esplora` and `emvault-electrum` changelogs.
+
 ## [0.6.0] - 2026-07-29
 
 ### Added
