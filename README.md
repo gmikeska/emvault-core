@@ -21,7 +21,7 @@ re-exports the whole family behind feature gates.
 
 ```toml
 [dependencies]
-emvault-core = "0.6"
+emvault-core = "0.7"
 ```
 
 ## Design priorities
@@ -206,8 +206,8 @@ vars are missing or the node is unreachable.
 | `node-tests`  | off     | Enables the `node_cross_check` integration tests against `bitcoind`.  |
 | `elements`    | off     | Adds Elements/Liquid discriminant variants to `NetworkType` (the pipeline lives in `emvault-elements`). |
 | `hsm-sweep-tests` | off | Integration tests exercising sweep algorithms with real HSM-backed signers (`emvault-pkcs11` + `emvault-dev-signer` + SoftHSM2). |
-| `esplora`     | off     | Pulls in the [`emvault-esplora`](https://github.com/gmikeska/emvault-esplora) companion crate — a nodeless **Esplora + Waterfalls** chain backend — and re-exports it as `emvault_core::esplora` (plus `From<EsploraSyncResult> for chain_sync::SyncResult`). |
-| `electrum`    | off     | Pulls in the [`emvault-electrum`](https://github.com/gmikeska/emvault-electrum) companion crate — a **descriptor-private** electrs/Electrum chain backend (sync/broadcast + a scripthash watch layer) — and re-exports it as `emvault_core::electrum` (plus `From<ElectrumSyncResult> for chain_sync::SyncResult`). |
+| `esplora`     | off     | Pulls in the [`emvault-esplora`](https://github.com/gmikeska/emvault-esplora) companion crate — a nodeless **Esplora + Waterfalls** chain backend (sync/broadcast + `tip_height()`/`get_tx()` accessors) — and re-exports it as `emvault_core::esplora` (plus `From<EsploraSyncResult> for chain_sync::SyncResult`). |
+| `electrum`    | off     | Pulls in the [`emvault-electrum`](https://github.com/gmikeska/emvault-electrum) companion crate — a **descriptor-private** electrs/Electrum chain backend (sync/broadcast + a scripthash watch layer + `tip_height()`/`get_tx()` accessors) — and re-exports it as `emvault_core::electrum` (plus `From<ElectrumSyncResult> for chain_sync::SyncResult`). |
 
 ## License
 
