@@ -15,6 +15,23 @@ use serde::{Deserialize, Serialize};
 /// This is a runtime discriminant; compile-time network separation is
 /// established at the wallet layer ([`bdk_wallet::Wallet`] for Bitcoin,
 /// `lwk_wollet::Wollet` for Elements).
+///
+/// # Example
+///
+/// ```
+/// use bitcoin::Network;
+/// use emvault_core::NetworkType;
+///
+/// let net = NetworkType::from(Network::Testnet);
+/// assert!(net.is_bitcoin());
+/// assert_eq!(net.bitcoin(), Some(Network::Testnet));
+/// assert_eq!(net.to_string(), "bitcoin:testnet");
+///
+/// // Round-trips through serde as an internally-tagged enum.
+/// let json = serde_json::to_string(&net).unwrap();
+/// let back: NetworkType = serde_json::from_str(&json).unwrap();
+/// assert_eq!(net, back);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 #[serde(tag = "kind", rename_all = "snake_case")]

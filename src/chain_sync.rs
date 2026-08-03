@@ -570,4 +570,117 @@ mod tests {
             "the tx's anchor block was reorged out of the local chain"
         );
     }
+
+    /// A recognizable non-empty [`ChangeSet`] so the `changeset` field can be
+    /// compared for exact equality after conversion.
+    #[cfg(any(feature = "esplora", feature = "electrum"))]
+    fn sample_changeset() -> ChangeSet {
+        ChangeSet {
+            network: Some(Network::Regtest),
+            ..Default::default()
+        }
+    }
+
+    /// A deterministic distinct [`Txid`] built from a single byte.
+    #[cfg(any(feature = "esplora", feature = "electrum"))]
+    fn sample_txid(byte: u8) -> Txid {
+        Txid::from_byte_array([byte; 32])
+    }
+
+    /// Field-for-field assertion that a converted [`SyncResult`] carries exactly
+    /// the expected values — proves the `From` impl maps every field, not a
+    /// subset, and reorders none.
+    #[cfg(any(feature = "esplora", feature = "electrum"))]
+    fn assert_maps(
+        got: &SyncResult,
+        changeset: &Option<ChangeSet>,
+        blocks_synced: u32,
+        new_mempool_txs: u32,
+        tip_height: u32,
+        evicted_txids: &[Txid],
+        reorg_rebuilt: bool,
+    ) {
+        assert_eq!(&got.changeset, changeset, "changeset");
+        assert_eq!(got.blocks_synced, blocks_synced, "blocks_synced");
+        assert_eq!(got.new_mempool_txs, new_mempool_txs, "new_mempool_txs");
+        assert_eq!(got.tip_height, tip_height, "tip_height");
+        assert_eq!(got.evicted_txids, evicted_txids, "evicted_txids");
+        assert_eq!(got.reorg_rebuilt, reorg_rebuilt, "reorg_rebuilt");
+    }
+
+    #[cfg(feature = "esplora")]
+    #[test]
+    fn from_esplora_sync_result_maps_every_field() {
+        // reorg-rebuild shape: Some changeset, non-zero counters, eviction list,
+        // reorg_rebuilt: true.
+        let evicted = vec![sample_txid(0xaa), sample_txid(0xbb)];
+        let src = emvault_esplora::EsploraSyncResult {
+            changeset: Some(sample_changeset()),
+            blocks_synced: 7,
+            new_mempool_txs: 3,
+            tip_height: 500_000,
+            evicted_txids: evicted.clone(),
+            reorg_rebuilt: true,
+        };
+        let got = SyncResult::from(src);
+        assert_maps(
+            &got,
+            &Some(sample_changeset()),
+            7,
+            3,
+            500_000,
+            &evicted,
+            true,
+        );
+
+        // in-sync shape: None, zeros, empty, false.
+        let src = emvault_esplora::EsploraSyncResult {
+            changeset: None,
+            blocks_synced: 0,
+            new_mempool_txs: 0,
+            tip_height: 0,
+            evicted_txids: Vec::new(),
+            reorg_rebuilt: false,
+        };
+        let got = SyncResult::from(src);
+        assert_maps(&got, &None, 0, 0, 0, &[], false);
+    }
+
+    #[cfg(feature = "electrum")]
+    #[test]
+    fn from_electrum_sync_result_maps_every_field() {
+        // reorg-rebuild shape: Some changeset, non-zero counters, eviction list,
+        // reorg_rebuilt: true.
+        let evicted = vec![sample_txid(0xaa), sample_txid(0xbb)];
+        let src = emvault_electrum::ElectrumSyncResult {
+            changeset: Some(sample_changeset()),
+            blocks_synced: 7,
+            new_mempool_txs: 3,
+            tip_height: 500_000,
+            evicted_txids: evicted.clone(),
+            reorg_rebuilt: true,
+        };
+        let got = SyncResult::from(src);
+        assert_maps(
+            &got,
+            &Some(sample_changeset()),
+            7,
+            3,
+            500_000,
+            &evicted,
+            true,
+        );
+
+        // in-sync shape: None, zeros, empty, false.
+        let src = emvault_electrum::ElectrumSyncResult {
+            changeset: None,
+            blocks_synced: 0,
+            new_mempool_txs: 0,
+            tip_height: 0,
+            evicted_txids: Vec::new(),
+            reorg_rebuilt: false,
+        };
+        let got = SyncResult::from(src);
+        assert_maps(&got, &None, 0, 0, 0, &[], false);
+    }
 }

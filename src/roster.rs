@@ -88,6 +88,31 @@ pub enum RosterError {
 /// - [`RosterError::RemoveNotMember`] if a `remove` isn't a current member.
 /// - [`RosterError::AddAlreadyMember`] if an `add` is already a member.
 /// - [`RosterError::EmptyResult`] if no members would remain.
+///
+/// # Example
+///
+/// ```
+/// use emvault_core::roster::{compute_roster_plan, RosterAction};
+/// use uuid::Uuid;
+///
+/// let alice = Uuid::from_u128(1);
+/// let bob = Uuid::from_u128(2);
+/// let carol = Uuid::from_u128(3);
+///
+/// // Start from {alice, bob}; add carol and remove bob.
+/// let plan = compute_roster_plan(&[alice, bob], &[carol], &[bob])?;
+///
+/// assert_eq!(plan.next_members, vec![alice, carol]);
+/// assert_eq!(
+///     plan.changes,
+///     vec![
+///         (alice, RosterAction::Keep),
+///         (bob, RosterAction::Remove),
+///         (carol, RosterAction::Add),
+///     ],
+/// );
+/// # Ok::<(), emvault_core::roster::RosterError>(())
+/// ```
 pub fn compute_roster_plan(
     current: &[Uuid],
     add: &[Uuid],
