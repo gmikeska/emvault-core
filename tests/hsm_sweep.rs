@@ -184,7 +184,6 @@ fn open_session(idx: usize, path: &DerivationPath) -> Pkcs11Session {
         SlotIdentifier::label(label),
         pin.to_string(),
         path.clone(),
-        Box::new(DevBackend),
     );
     Pkcs11Session::open(&cfg, &SlotIdentifier::label(label), pin)
         .unwrap_or_else(|e| panic!("open session on {label}: {e}"))
