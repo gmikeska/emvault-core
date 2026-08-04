@@ -11,7 +11,7 @@ use std::time::SystemTime;
 
 use miniscript::{Descriptor, DescriptorPublicKey};
 
-use crate::descriptor::{DescriptorBuilder, KeyMode};
+use crate::descriptor::{DescriptorBuilder, KeyMode, ScriptType};
 use crate::error::FederationError;
 use crate::network::NetworkType;
 use crate::signer::{Signer, SignerId};
@@ -46,6 +46,7 @@ pub struct Federation<S: Signer = Box<dyn Signer>> {
     descriptor_string: String,
     network: NetworkType,
     key_mode: KeyMode,
+    script_type: ScriptType,
     created_at: SystemTime,
 }
 
@@ -58,6 +59,7 @@ impl<S: Signer + Clone> Clone for Federation<S> {
             descriptor_string: self.descriptor_string.clone(),
             network: self.network,
             key_mode: self.key_mode,
+            script_type: self.script_type,
             created_at: self.created_at,
         }
     }
@@ -70,6 +72,7 @@ impl<S: Signer> std::fmt::Debug for Federation<S> {
             .field("signer_count", &self.signers.len())
             .field("network", &self.network)
             .field("key_mode", &self.key_mode)
+            .field("script_type", &self.script_type)
             .field("descriptor", &self.descriptor_string)
             .field("created_at", &self.created_at)
             .finish_non_exhaustive()
@@ -110,12 +113,32 @@ impl<S: Signer> Federation<S> {
         network: NetworkType,
         key_mode: KeyMode,
     ) -> Result<Self, FederationError> {
+        Self::with_config(threshold, signers, network, key_mode, ScriptType::default())
+    }
+
+    /// Like [`Federation::with_key_mode`] but also selects the [`ScriptType`]
+    /// (Segwit v0 `wsh` vs. Taproot `tr`). Taproot requires
+    /// [`KeyMode::Fixed`] — the HSM-federation model.
+    ///
+    /// # Errors
+    ///
+    /// Same conditions as [`Federation::new`], plus [`FederationError::Descriptor`]
+    /// if the underlying [`DescriptorBuilder`] rejects the inputs (including a
+    /// [`ScriptType::Tr`] + [`KeyMode::Ranged`] combination).
+    pub fn with_config(
+        threshold: u32,
+        signers: Vec<S>,
+        network: NetworkType,
+        key_mode: KeyMode,
+        script_type: ScriptType,
+    ) -> Result<Self, FederationError> {
         validate_inputs(threshold, &signers, network)?;
-        // Bitcoin networks build a `wsh(sortedmulti(...))` descriptor here.
-        // Elements networks defer to the `emvault-elements` crate's
-        // `CtDescriptorBuilder` and store no Bitcoin descriptor.
+        // Bitcoin networks build the descriptor here (`wsh(sortedmulti(...))`
+        // or `tr(NUMS, multi_a(...))`). Elements networks defer to the
+        // `emvault-elements` crate's `CtDescriptorBuilder` and store no
+        // Bitcoin descriptor.
         let (descriptor, descriptor_string) = if network.is_bitcoin() {
-            let desc = build_descriptor(threshold, &signers, network, key_mode)?;
+            let desc = build_descriptor(threshold, &signers, network, key_mode, script_type)?;
             let s = desc.to_string();
             (Some(desc), s)
         } else {
@@ -128,6 +151,7 @@ impl<S: Signer> Federation<S> {
             descriptor_string,
             network,
             key_mode,
+            script_type,
             created_at: SystemTime::now(),
         })
     }
@@ -155,6 +179,11 @@ impl<S: Signer> Federation<S> {
     /// The federation's [`KeyMode`].
     pub fn key_mode(&self) -> KeyMode {
         self.key_mode
+    }
+
+    /// The federation's [`ScriptType`] (Segwit v0 `wsh` vs. Taproot `tr`).
+    pub fn script_type(&self) -> ScriptType {
+        self.script_type
     }
 
     /// When the federation was constructed (or last mutated).
@@ -242,7 +271,13 @@ impl<S: Signer + Clone> Federation<S> {
                 }
             })
             .collect();
-        Self::with_key_mode(self.threshold, signers, self.network, self.key_mode)
+        Self::with_config(
+            self.threshold,
+            signers,
+            self.network,
+            self.key_mode,
+            self.script_type,
+        )
     }
 
     /// Add `new` to the federation. `n` increases by 1; threshold unchanged.
@@ -257,7 +292,13 @@ impl<S: Signer + Clone> Federation<S> {
         }
         let mut signers: Vec<S> = self.signers.clone();
         signers.push(new);
-        Self::with_key_mode(self.threshold, signers, self.network, self.key_mode)
+        Self::with_config(
+            self.threshold,
+            signers,
+            self.network,
+            self.key_mode,
+            self.script_type,
+        )
     }
 
     /// Remove the signer with `id`. `n` decreases by 1; threshold unchanged
@@ -279,7 +320,13 @@ impl<S: Signer + Clone> Federation<S> {
             .filter(|s| &s.id() != id)
             .cloned()
             .collect();
-        Self::with_key_mode(self.threshold, signers, self.network, self.key_mode)
+        Self::with_config(
+            self.threshold,
+            signers,
+            self.network,
+            self.key_mode,
+            self.script_type,
+        )
     }
 
     /// Change the signing threshold without modifying the signer set.
@@ -289,7 +336,13 @@ impl<S: Signer + Clone> Federation<S> {
     /// Any error returned by [`Self::with_key_mode`].
     pub fn change_threshold(&self, new_threshold: u32) -> Result<Self, FederationError> {
         let signers: Vec<S> = self.signers.clone();
-        Self::with_key_mode(new_threshold, signers, self.network, self.key_mode)
+        Self::with_config(
+            new_threshold,
+            signers,
+            self.network,
+            self.key_mode,
+            self.script_type,
+        )
     }
 }
 
@@ -333,8 +386,11 @@ fn build_descriptor<S: Signer>(
     signers: &[S],
     network: NetworkType,
     key_mode: KeyMode,
+    script_type: ScriptType,
 ) -> Result<Descriptor<DescriptorPublicKey>, FederationError> {
-    let mut builder = DescriptorBuilder::new(threshold, network).key_mode(key_mode);
+    let mut builder = DescriptorBuilder::new(threshold, network)
+        .key_mode(key_mode)
+        .script_type(script_type);
     for s in signers {
         // Treat each S as a `&dyn Signer` via auto-deref of the impl on Box.
         builder.add_signer(s_as_dyn(s))?;
@@ -368,6 +424,68 @@ mod tests {
         assert_eq!(f.threshold(), 2);
         assert_eq!(f.total_signers(), 3);
         assert!(f.descriptor_string().starts_with("wsh(sortedmulti(2,"));
+        assert_eq!(f.script_type(), ScriptType::Wsh);
+    }
+
+    #[test]
+    fn build_taproot_2_of_3() {
+        let f = Federation::with_config(
+            2,
+            dyn_signers(&[1, 2, 3]),
+            Network::Testnet.into(),
+            KeyMode::Fixed,
+            ScriptType::Tr,
+        )
+        .unwrap();
+        assert_eq!(f.script_type(), ScriptType::Tr);
+        let d = f.descriptor_string();
+        assert!(d.starts_with("tr("), "got {d}");
+        assert!(d.contains("multi_a(2,"), "got {d}");
+    }
+
+    #[test]
+    fn taproot_survives_mutation() {
+        // Regression: mutating a taproot federation must not silently revert it
+        // to wsh (which would change the descriptor, address, and vault type).
+        let signers: Vec<MockSigner> = [1, 2, 3]
+            .iter()
+            .map(|&s| MockSigner::with_seed(s, Network::Testnet))
+            .collect();
+        let f = Federation::with_config(
+            2,
+            signers,
+            Network::Testnet.into(),
+            KeyMode::Fixed,
+            ScriptType::Tr,
+        )
+        .unwrap();
+        let rotated = f
+            .rotate_signer(
+                &f.signers()[0].id(),
+                &MockSigner::with_seed(99, Network::Testnet),
+            )
+            .unwrap();
+        assert_eq!(rotated.script_type(), ScriptType::Tr);
+        assert!(rotated.descriptor_string().starts_with("tr("));
+        let smaller = f.change_threshold(1).unwrap();
+        assert_eq!(smaller.script_type(), ScriptType::Tr);
+        assert!(smaller.descriptor_string().starts_with("tr("));
+    }
+
+    #[test]
+    fn taproot_ranged_rejected_at_federation() {
+        let err = Federation::with_config(
+            2,
+            dyn_signers(&[1, 2, 3]),
+            Network::Testnet.into(),
+            KeyMode::Ranged,
+            ScriptType::Tr,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, FederationError::Descriptor(_)),
+            "expected descriptor rejection, got {err:?}"
+        );
     }
 
     #[test]
