@@ -111,7 +111,7 @@ pub mod test_utils;
 #[cfg(any(test, feature = "test-utils"))]
 pub use test_utils::MockSigner;
 
-pub use descriptor::DescriptorBuilder;
+pub use descriptor::{DescriptorBuilder, ScriptType};
 pub use error::{
     DescriptorError, EmVaultError, FederatedWalletError, FederationError, MigrationError,
     PsbtError, RecoveryError, SignerError, SnapshotError,
