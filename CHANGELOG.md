@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > Entries for 0.5.0 and earlier were reconstructed from git history.
 
+## [0.8.0] - Unreleased
+
+### Added
+- **Taproot descriptor support.** A new `ScriptType` (`Wsh` default / `Tr`),
+  selectable via `DescriptorBuilder::script_type(...)` and
+  `Federation::with_config(...)`, lets a federation emit
+  `tr(NUMS, multi_a(m, ...))` — a script-path-only P2TR with the BIP-341 NUMS
+  internal key (key-path provably unspendable) and BIP-341-sorted x-only
+  cosigner keys. This is byte-identical to `sortedmulti_a`, which the pinned
+  miniscript does not provide. Supported for `KeyMode::Fixed` (the HSM
+  federation model); `Tr` + `KeyMode::Ranged` is rejected.
+- `Federation::script_type()` accessor.
+
+### Fixed
+- Federation mutations (`rotate_signer`, `add_signer`, `remove_signer`,
+  `change_threshold`) now preserve the `ScriptType`. Previously they rebuilt the
+  descriptor as `wsh`, which would have silently changed a taproot vault's
+  descriptor and address on any signer rotation.
+
 ## [0.7.0] - 2026-08-03
 
 ### Changed

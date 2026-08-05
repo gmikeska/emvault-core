@@ -9,7 +9,7 @@
 //! Generic over the [`Signer`] implementation so any backend (consumer hardware
 //! wallets, HSMs, …) builds federations the same way.
 
-use crate::descriptor::{KeyMode, to_multipath_string};
+use crate::descriptor::{KeyMode, ScriptType, to_multipath_string};
 use crate::error::{EmVaultError, SnapshotError};
 use crate::signer::Signer;
 use crate::{DescriptorBuilder, Federation, FederationSnapshot, NetworkType};
@@ -37,7 +37,28 @@ pub fn build_federation<S: Signer>(
     threshold: u32,
     network: NetworkType,
 ) -> Result<BuiltFederation, EmVaultError> {
-    let mut builder = DescriptorBuilder::new(threshold, network).key_mode(KeyMode::Ranged);
+    build_federation_with(signers, threshold, network, ScriptType::Wsh)
+}
+
+/// Build the canonical descriptor + snapshot for a ranged federation over
+/// `signers` with the given `threshold` and `script_type`
+/// (`Wsh` → `wsh(sortedmulti(...))`, `Tr` → `tr(NUMS, multi_a(...))`). Always
+/// [`KeyMode::Ranged`] — the multipath HD shape both the apps and consumer
+/// hardware wallets use. [`build_federation`] is the `Wsh` shorthand.
+///
+/// # Errors
+///
+/// Same as [`build_federation`]: [`EmVaultError`] if [`DescriptorBuilder`] or
+/// [`Federation`] rejects the inputs, or if the snapshot fails to serialise.
+pub fn build_federation_with<S: Signer>(
+    signers: Vec<S>,
+    threshold: u32,
+    network: NetworkType,
+    script_type: ScriptType,
+) -> Result<BuiltFederation, EmVaultError> {
+    let mut builder = DescriptorBuilder::new(threshold, network)
+        .key_mode(KeyMode::Ranged)
+        .script_type(script_type);
     for s in &signers {
         builder.add_signer(s)?;
     }

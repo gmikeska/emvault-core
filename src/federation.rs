@@ -473,19 +473,21 @@ mod tests {
     }
 
     #[test]
-    fn taproot_ranged_rejected_at_federation() {
-        let err = Federation::with_config(
+    fn taproot_ranged_builds_at_federation() {
+        let fed = Federation::with_config(
             2,
             dyn_signers(&[1, 2, 3]),
             Network::Testnet.into(),
             KeyMode::Ranged,
             ScriptType::Tr,
         )
-        .unwrap_err();
-        assert!(
-            matches!(err, FederationError::Descriptor(_)),
-            "expected descriptor rejection, got {err:?}"
-        );
+        .expect("ranged taproot federation must build");
+        assert_eq!(fed.script_type(), ScriptType::Tr);
+        assert_eq!(fed.key_mode(), KeyMode::Ranged);
+        let s = fed.descriptor_string();
+        assert!(s.starts_with("tr("), "got {s}");
+        assert!(s.contains("multi_a(2,"), "got {s}");
+        assert!(s.contains("/0/*"), "ranged taproot needs wildcards: {s}");
     }
 
     #[test]

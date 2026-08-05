@@ -27,19 +27,27 @@
 //!
 //! The pinned `miniscript` (12.x) exposes `multi_a` but **not** `sortedmulti_a`,
 //! so the builder reproduces `sortedmulti_a` semantics itself: it sorts the
-//! x-only cosigner keys lexicographically (the BIP-341 canonical order) before
-//! emitting `multi_a`. The resulting leaf script, tap tweak, and address are
-//! byte-identical to `tr(H, sortedmulti_a(m, ...))`; only the descriptor
-//! **string** differs (`multi_a` with the sort baked in vs. `sortedmulti_a`).
-//! A watch-only import of the emitted `multi_a` descriptor into Core/BDK
-//! yields the same address.
+//! cosigner keys by their 32-byte x-only *parent* key (the BIP-341 canonical
+//! order) before emitting `multi_a`. This sort is fixed once per vault and is
+//! index-independent, so the same canonical order holds at every derivation
+//! index. The resulting leaf script, tap tweak, and address are byte-identical
+//! to `tr(H, sortedmulti_a(m, ...))`; only the descriptor **string** differs
+//! (`multi_a` with the sort baked in vs. `sortedmulti_a`). A watch-only import
+//! of the emitted `multi_a` descriptor into Core/BDK yields the same address.
 //!
-//! Taproot is currently implemented for [`KeyMode::Fixed`] only — the HSM
-//! federation model this path targets. Ranged taproot would need the
-//! cosigner order recomputed per derivation index (what `sortedmulti_a` does
-//! at address-generation time), which the pinned miniscript cannot express;
-//! [`ScriptType::Tr`] + [`KeyMode::Ranged`] is rejected rather than emitting a
-//! subtly wrong sort.
+//! Taproot works in **both** key modes:
+//! - **Fixed** — single x-only cosigner keys; one P2TR address (HSM federations).
+//! - **Ranged** — origin-annotated xpubs with an unhardened wildcard
+//!   (`xpub.../0/*`, lifted to `/<0;1>/*` by [`to_multipath_string`]). This is
+//!   the shape consumer hardware wallets require (BIP-388 wallet policies over
+//!   ranged xpubs). The fixed-order `multi_a` above is what keeps this
+//!   expressible inside the pinned miniscript: a *true* `sortedmulti_a` would
+//!   re-sort per index, which miniscript 12.x cannot represent.
+//!
+//! Note the taproot **internal key** is still emitted as the raw 64-hex NUMS
+//! literal *H*. Consumer devices that demand the internal key as an xpub
+//! (BIP-388) need a NUMS-as-xpub encoding layered on top; that is an
+//! application/formatting concern, not a change to the on-chain output here.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -67,7 +75,9 @@ pub enum ScriptType {
     #[default]
     Wsh,
     /// Taproot script-path-only `tr(NUMS, multi_a(m, ...))` (BIP-341/342).
-    /// Requires [`KeyMode::Fixed`].
+    /// Works in both [`KeyMode::Fixed`] (single x-only cosigner keys) and
+    /// [`KeyMode::Ranged`] (origin-annotated xpubs with `/**`, the shape
+    /// consumer hardware wallets require via BIP-388 wallet policies).
     Tr,
 }
 
@@ -162,9 +172,7 @@ impl DescriptorBuilder {
     /// Returns [`DescriptorError::Parse`] if no signers have been added or
     /// the configured network is unsupported, [`DescriptorError::NetworkMismatch`]
     /// if any signer's xpub is on a different network,
-    /// [`DescriptorError::DuplicateKey`] if two formatted keys collide,
-    /// [`DescriptorError::TaprootRangedUnsupported`] for a
-    /// [`ScriptType::Tr`] + [`KeyMode::Ranged`] combination, or
+    /// [`DescriptorError::DuplicateKey`] if two formatted keys collide, or
     /// [`DescriptorError::Miniscript`] if miniscript rejects the assembled
     /// descriptor.
     pub fn build(self) -> Result<Descriptor<DescriptorPublicKey>, DescriptorError> {
@@ -215,20 +223,29 @@ impl DescriptorBuilder {
     /// lexicographically (BIP-341) before emitting `multi_a`, since the pinned
     /// miniscript lacks a native `sortedmulti_a`. See the module docs.
     fn build_taproot(&self) -> Result<Descriptor<DescriptorPublicKey>, DescriptorError> {
-        if self.mode != KeyMode::Fixed {
-            return Err(DescriptorError::TaprootRangedUnsupported);
-        }
-
-        // (x-only serialization, descriptor key). Sorting by the 32-byte
-        // x-only key is the canonical BIP-341 `sortedmulti_a` order.
+        // Sort by the 32-byte x-only serialization of each signer's *parent*
+        // key. This is our stable, index-independent stand-in for
+        // `sortedmulti_a` (which the pinned miniscript lacks): we fix one
+        // canonical key order per vault rather than re-sorting per derivation
+        // index. The parent key is the same in Fixed mode (the leaf key) and
+        // Ranged mode (the xpub), so the order is identical at every index.
         let mut keyed: Vec<([u8; 32], DescriptorPublicKey)> = self
             .entries
             .values()
             .map(|e| {
                 let (xonly, _parity) = e.xpub.public_key.x_only_public_key();
-                (xonly.serialize(), build_taproot_key(e))
+                // Fixed mode emits a single x-only key per cosigner; Ranged
+                // mode emits the origin-annotated xpub with an unhardened
+                // wildcard (`/0/*`), which miniscript renders x-only in Tap
+                // context. `to_multipath_string` later lifts `/0/*` to the
+                // BIP-389 `/<0;1>/*` multipath form.
+                let key = match self.mode {
+                    KeyMode::Fixed => build_taproot_key(e),
+                    KeyMode::Ranged => build_descriptor_key(self.mode, e)?,
+                };
+                Ok::<_, DescriptorError>((xonly.serialize(), key))
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
         keyed.sort_by_key(|(xonly, _)| *xonly);
 
         let keys: Vec<DescriptorPublicKey> = keyed.into_iter().map(|(_, k)| k).collect();
@@ -331,6 +348,27 @@ pub fn to_multipath_string(desc: &Descriptor<DescriptorPublicKey>) -> String {
     let s = desc.to_string();
     let body = s.split_once('#').map_or(s.as_str(), |(b, _)| b);
     body.replace("/0/*", "/<0;1>/*")
+}
+
+/// The [`ScriptType`]s a federation of `signers` is eligible to use, given each
+/// signer's advertised [`capabilities`](crate::signer::Signer::capabilities).
+///
+/// [`ScriptType::Wsh`] is always eligible. [`ScriptType::Tr`] is eligible only
+/// when the signer set is non-empty and **every** signer reports taproot
+/// support — a taproot federation can only be signed if all cosigners can sign
+/// the taproot script path.
+///
+/// This is the shared eligibility gate for application selection UIs
+/// (test-app-xpub's script-type dropdown, test-app-pkcs11's validation of a
+/// configured/overridden choice). Picking the "best" among the eligible set —
+/// silent auto-selection — is an application policy, not a library concern, and
+/// is deliberately not provided here.
+pub fn available_script_types<S: Signer>(signers: &[S]) -> Vec<ScriptType> {
+    let mut out = vec![ScriptType::Wsh];
+    if !signers.is_empty() && signers.iter().all(|s| s.capabilities().taproot) {
+        out.push(ScriptType::Tr);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -522,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn tr_ranged_is_rejected() {
+    fn tr_ranged_builds_multi_a_with_wildcards() {
         let signers = three_signers();
         let mut b = DescriptorBuilder::new(2, NetworkType::Bitcoin(Network::Testnet))
             .script_type(ScriptType::Tr)
@@ -530,11 +568,61 @@ mod tests {
         for s in &signers {
             b.add_signer(s).unwrap();
         }
-        let err = b.build().unwrap_err();
+        let desc = b.build().unwrap();
+        let s = desc.to_string();
+        assert!(s.starts_with("tr("), "got {s}");
+        assert!(s.contains("multi_a(2,"), "got {s}");
+        // Ranged taproot must carry the unhardened wildcard on each cosigner.
+        assert!(s.contains("/0/*"), "ranged taproot missing wildcard: {s}");
+        // The NUMS internal key stays a raw x-only literal (no BIP-388 xpub
+        // encoding yet); it must not have acquired a wildcard.
         assert!(
-            matches!(err, DescriptorError::TaprootRangedUnsupported),
-            "got {err:?}"
+            s.contains(NUMS_INTERNAL_KEY),
+            "NUMS internal key missing: {s}"
         );
+    }
+
+    #[test]
+    fn tr_ranged_multipath_round_trips() {
+        // The ranged taproot multipath string must parse back through
+        // miniscript so BDK's `create_from_two_path_descriptor` accepts it.
+        use std::str::FromStr;
+
+        let signers = three_signers();
+        let mut b = DescriptorBuilder::new(2, NetworkType::Bitcoin(Network::Testnet))
+            .script_type(ScriptType::Tr)
+            .key_mode(KeyMode::Ranged);
+        for s in &signers {
+            b.add_signer(s).unwrap();
+        }
+        let desc = b.build().unwrap();
+        let mp = to_multipath_string(&desc);
+        assert!(mp.contains("/<0;1>/*"), "got {mp}");
+        assert!(
+            !mp.contains("/0/*"),
+            "external-only wildcard should be lifted: {mp}"
+        );
+        // Round-trips through miniscript.
+        Descriptor::<DescriptorPublicKey>::from_str(&mp)
+            .expect("ranged taproot multipath must parse back");
+    }
+
+    #[test]
+    fn tr_ranged_order_is_canonical_across_insertion() {
+        let s1 = MockSigner::with_seed(21, Network::Testnet);
+        let s2 = MockSigner::with_seed(22, Network::Testnet);
+        let s3 = MockSigner::with_seed(23, Network::Testnet);
+        let mk = |order: [&MockSigner; 3]| -> String {
+            let mut b = DescriptorBuilder::new(2, NetworkType::Bitcoin(Network::Testnet))
+                .script_type(ScriptType::Tr)
+                .key_mode(KeyMode::Ranged);
+            for s in order {
+                b.add_signer(s).unwrap();
+            }
+            b.build().unwrap().to_string()
+        };
+        assert_eq!(mk([&s1, &s2, &s3]), mk([&s3, &s1, &s2]));
+        assert_eq!(mk([&s1, &s2, &s3]), mk([&s2, &s3, &s1]));
     }
 
     #[test]

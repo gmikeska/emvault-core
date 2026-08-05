@@ -116,13 +116,6 @@ pub enum DescriptorError {
     /// A descriptor public key conversion failed.
     #[error("descriptor key conversion failed: {0}")]
     KeyConversion(String),
-    /// Taproot (`tr(NUMS, multi_a(...))`) was requested with
-    /// [`crate::descriptor::KeyMode::Ranged`]. Ranged taproot needs the
-    /// cosigner order recomputed per derivation index (what `sortedmulti_a`
-    /// does at address-generation time), which the pinned miniscript cannot
-    /// express, so only [`crate::descriptor::KeyMode::Fixed`] is supported.
-    #[error("taproot descriptors require KeyMode::Fixed (ranged taproot unsupported)")]
-    TaprootRangedUnsupported,
     /// The descriptor is not the expected `wsh(sortedmulti(m, …))` shape, so
     /// its multisig policy cannot be extracted for comparison. Raised by
     /// [`crate::verify::multisig_policy`].
