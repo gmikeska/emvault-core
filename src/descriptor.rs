@@ -44,10 +44,15 @@
 //!   expressible inside the pinned miniscript: a *true* `sortedmulti_a` would
 //!   re-sort per index, which miniscript 12.x cannot represent.
 //!
-//! Note the taproot **internal key** is still emitted as the raw 64-hex NUMS
-//! literal *H*. Consumer devices that demand the internal key as an xpub
-//! (BIP-388) need a NUMS-as-xpub encoding layered on top; that is an
-//! application/formatting concern, not a change to the on-chain output here.
+//! The taproot **internal key** encoding is selectable via
+//! [`TaprootInternalKey`]: the default [`RawNums`](TaprootInternalKey::RawNums)
+//! emits the raw 64-hex `H` literal (the historical HSM/pkcs11 form), while
+//! [`NumsXpub`](TaprootInternalKey::NumsXpub) wraps `H` as a BIP-32 xpub with a
+//! per-federation chain code so the descriptor is expressible as a BIP-388
+//! wallet policy that consumer hardware (Ledger) can register. Both encode the
+//! same unspendable point `H`; only the descriptor string (and thus the address)
+//! differs, so a federation commits to one form. See
+//! [`crate::build_federation_taproot_with`] and [`Bip388TaprootPolicy`].
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -66,6 +71,24 @@ use crate::signer::{Signer, SignerId};
 /// generator's compressed encoding); using it guarantees no key-path spend is
 /// possible, so the federation's `multi_a` policy is the only way to spend.
 const NUMS_INTERNAL_KEY: &str = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
+
+/// How the taproot **internal key** is encoded in a `tr(...)` descriptor.
+///
+/// - [`RawNums`](TaprootInternalKey::RawNums): the raw 64-hex BIP-341 `H` literal
+///   (default; the historical form — HSM/pkcs11 path, unchanged).
+/// - [`NumsXpub`](TaprootInternalKey::NumsXpub): `H` wrapped as a BIP-32 xpub with
+///   the given 32-byte chain code, so the descriptor is expressible as a BIP-388
+///   wallet policy (`tr(@0/**, …)`) that consumer hardware (Ledger) can register.
+///   The point is still `H`, so key-path spend stays provably impossible at every
+///   derivation index (children of an unknown-discrete-log point are also unknown).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TaprootInternalKey {
+    /// Raw 64-hex `H` literal (default).
+    #[default]
+    RawNums,
+    /// `H`-as-xpub with this chain code (BIP-388-compatible).
+    NumsXpub([u8; 32]),
+}
 
 /// The on-chain script form the descriptor compiles to.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -105,6 +128,8 @@ pub struct DescriptorBuilder {
     threshold: u32,
     mode: KeyMode,
     script_type: ScriptType,
+    /// Taproot internal-key encoding (ignored for `wsh`). Default [`RawNums`].
+    taproot_internal_key: TaprootInternalKey,
     network: NetworkType,
     /// Ordered by [`SignerId`] for canonical output before passing to
     /// `sortedmulti` (which performs its own lexicographic sort over the
@@ -126,6 +151,7 @@ impl DescriptorBuilder {
             threshold,
             mode: KeyMode::default(),
             script_type: ScriptType::default(),
+            taproot_internal_key: TaprootInternalKey::default(),
             network,
             entries: BTreeMap::new(),
         }
@@ -142,6 +168,15 @@ impl DescriptorBuilder {
     #[must_use]
     pub fn script_type(mut self, script_type: ScriptType) -> Self {
         self.script_type = script_type;
+        self
+    }
+
+    /// Override the taproot [`TaprootInternalKey`] encoding (ignored for `wsh`).
+    /// Default is [`TaprootInternalKey::RawNums`]; pass
+    /// [`TaprootInternalKey::NumsXpub`] for a BIP-388-registerable descriptor.
+    #[must_use]
+    pub fn taproot_internal_key(mut self, key: TaprootInternalKey) -> Self {
+        self.taproot_internal_key = key;
         self
     }
 
@@ -199,7 +234,7 @@ impl DescriptorBuilder {
         }
         match self.script_type {
             ScriptType::Wsh => self.build_wsh(),
-            ScriptType::Tr => self.build_taproot(),
+            ScriptType::Tr => self.build_taproot(bitcoin_net),
         }
     }
 
@@ -217,28 +252,46 @@ impl DescriptorBuilder {
             .map_err(DescriptorError::Miniscript)
     }
 
-    /// Assemble the Taproot `tr(NUMS, multi_a(m, ...))` descriptor.
+    /// Assemble the Taproot `tr(<internal>, multi_a(m, ...))` descriptor, where
+    /// `<internal>` is the raw NUMS literal or a NUMS-as-xpub per
+    /// [`TaprootInternalKey`].
     ///
     /// Reproduces `sortedmulti_a` ordering by sorting the x-only cosigner keys
     /// lexicographically (BIP-341) before emitting `multi_a`, since the pinned
     /// miniscript lacks a native `sortedmulti_a`. See the module docs.
-    fn build_taproot(&self) -> Result<Descriptor<DescriptorPublicKey>, DescriptorError> {
+    fn build_taproot(
+        &self,
+        bitcoin_net: bitcoin::Network,
+    ) -> Result<Descriptor<DescriptorPublicKey>, DescriptorError> {
+        let keys = self.sorted_taproot_keys()?;
+        reject_duplicate_keys(&keys)?;
+
+        let joined = keys
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let internal = self.taproot_internal_key_str(bitcoin_net)?;
+        let desc_str = format!(
+            "tr({internal},multi_a({threshold},{joined}))",
+            threshold = self.threshold,
+        );
+        Descriptor::from_str(&desc_str).map_err(DescriptorError::Miniscript)
+    }
+
+    /// Cosigner keys for a taproot descriptor, in the fixed `sortedmulti_a`
+    /// order (x-only lexicographic over each signer's parent key). Shared by the
+    /// descriptor build and the BIP-388 policy accessor so they never diverge.
+    fn sorted_taproot_keys(&self) -> Result<Vec<DescriptorPublicKey>, DescriptorError> {
         // Sort by the 32-byte x-only serialization of each signer's *parent*
-        // key. This is our stable, index-independent stand-in for
-        // `sortedmulti_a` (which the pinned miniscript lacks): we fix one
-        // canonical key order per vault rather than re-sorting per derivation
-        // index. The parent key is the same in Fixed mode (the leaf key) and
-        // Ranged mode (the xpub), so the order is identical at every index.
+        // key — a stable, index-independent stand-in for `sortedmulti_a`. The
+        // parent key is the same in Fixed mode (the leaf key) and Ranged mode
+        // (the xpub), so the order is identical at every derivation index.
         let mut keyed: Vec<([u8; 32], DescriptorPublicKey)> = self
             .entries
             .values()
             .map(|e| {
                 let (xonly, _parity) = e.xpub.public_key.x_only_public_key();
-                // Fixed mode emits a single x-only key per cosigner; Ranged
-                // mode emits the origin-annotated xpub with an unhardened
-                // wildcard (`/0/*`), which miniscript renders x-only in Tap
-                // context. `to_multipath_string` later lifts `/0/*` to the
-                // BIP-389 `/<0;1>/*` multipath form.
                 let key = match self.mode {
                     KeyMode::Fixed => build_taproot_key(e),
                     KeyMode::Ranged => build_descriptor_key(self.mode, e)?,
@@ -247,21 +300,139 @@ impl DescriptorBuilder {
             })
             .collect::<Result<_, _>>()?;
         keyed.sort_by_key(|(xonly, _)| *xonly);
+        Ok(keyed.into_iter().map(|(_, k)| k).collect())
+    }
 
-        let keys: Vec<DescriptorPublicKey> = keyed.into_iter().map(|(_, k)| k).collect();
-        reject_duplicate_keys(&keys)?;
+    /// The `tr(...)` internal-key term as it appears in the descriptor string:
+    /// the raw NUMS literal, or a ranged NUMS-xpub (`<xpub>/0/*`, later lifted
+    /// to `/<0;1>/*` by [`to_multipath_string`]).
+    fn taproot_internal_key_str(
+        &self,
+        bitcoin_net: bitcoin::Network,
+    ) -> Result<String, DescriptorError> {
+        match self.taproot_internal_key {
+            TaprootInternalKey::RawNums => Ok(NUMS_INTERNAL_KEY.to_string()),
+            TaprootInternalKey::NumsXpub(chain_code) => {
+                Ok(nums_xpub_descriptor_key(bitcoin_net, &chain_code)?.to_string())
+            }
+        }
+    }
 
-        let joined = keys
-            .iter()
-            .map(ToString::to_string)
+    /// The BIP-388 wallet policy (`template` + ordered `keys`) for a taproot
+    /// federation — the same order and NUMS-xpub the descriptor uses, so a
+    /// consumer device (Ledger) registers exactly the funded scriptPubKeys.
+    ///
+    /// Only valid when the builder is in [`TaprootInternalKey::NumsXpub`] mode
+    /// (BIP-388 policies cannot express a raw NUMS literal) and
+    /// [`ScriptType::Tr`].
+    ///
+    /// # Errors
+    /// [`DescriptorError`] if the builder isn't a NUMS-xpub taproot builder, the
+    /// network is unsupported, or key assembly fails.
+    pub fn bip388_taproot_policy(&self) -> Result<Bip388TaprootPolicy, DescriptorError> {
+        let TaprootInternalKey::NumsXpub(chain_code) = self.taproot_internal_key else {
+            return Err(DescriptorError::Parse(
+                "BIP-388 policy requires a NumsXpub taproot builder".into(),
+            ));
+        };
+        if self.script_type != ScriptType::Tr {
+            return Err(DescriptorError::Parse(
+                "BIP-388 policy requires ScriptType::Tr".into(),
+            ));
+        }
+        let bitcoin_net = self
+            .network
+            .bitcoin()
+            .ok_or_else(|| DescriptorError::Parse("only Bitcoin networks supported".into()))?;
+
+        // `@0` = the NUMS xpub (origin-less, wildcard stripped); `@1..@n` = the
+        // cosigners in descriptor order (origin-annotated, wildcard stripped).
+        // `strip_wildcard` turns `…/0/*` into the bare KEY_INFO Ledger wants;
+        // the `/**` lives in the template.
+        let nums_key =
+            strip_wildcard(&nums_xpub_descriptor_key(bitcoin_net, &chain_code)?.to_string());
+        let mut keys = vec![nums_key];
+        for k in self.sorted_taproot_keys()? {
+            keys.push(strip_wildcard(&k.to_string()));
+        }
+
+        let placeholders = (1..keys.len())
+            .map(|i| format!("@{i}/**"))
             .collect::<Vec<_>>()
             .join(",");
-        let desc_str = format!(
-            "tr({NUMS_INTERNAL_KEY},multi_a({threshold},{joined}))",
+        let template = format!(
+            "tr(@0/**,multi_a({threshold},{placeholders}))",
             threshold = self.threshold,
         );
-        Descriptor::from_str(&desc_str).map_err(DescriptorError::Miniscript)
+        Ok(Bip388TaprootPolicy { template, keys })
     }
+}
+
+/// A BIP-388 taproot wallet policy: a descriptor `template` with `@i`
+/// placeholders and the ordered `keys` they resolve to. The consumer device
+/// (Ledger) registers `WalletPolicy(name, template, keys)`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Bip388TaprootPolicy {
+    /// e.g. `tr(@0/**,multi_a(2,@1/**,@2/**))`.
+    pub template: String,
+    /// Key-info strings in `@i` order: `[fp/path]xpub` (or bare xpub for `@0`).
+    pub keys: Vec<String>,
+}
+
+/// Strip a trailing `/0/*` (or `/<0;1>/*`) wildcard from a descriptor-key
+/// string, leaving the bare BIP-388 `KEY_INFO` the `@i/**` template expands.
+fn strip_wildcard(key: &str) -> String {
+    key.trim_end_matches("/<0;1>/*")
+        .trim_end_matches("/0/*")
+        .to_string()
+}
+
+/// Build the ranged NUMS-as-xpub descriptor key (`<xpub>/0/*`, no origin) for
+/// the taproot internal-key position, encoding the BIP-341 `H` point as a BIP-32
+/// xpub with the given `chain_code`.
+fn nums_xpub_descriptor_key(
+    bitcoin_net: bitcoin::Network,
+    chain_code: &[u8; 32],
+) -> Result<DescriptorPublicKey, DescriptorError> {
+    let xpub = nums_xpub(bitcoin_net, chain_code)?;
+    let zero = ChildNumber::from_normal_idx(0)
+        .map_err(|e| DescriptorError::KeyConversion(e.to_string()))?;
+    Ok(DescriptorPublicKey::XPub(DescriptorXKey {
+        origin: None,
+        xkey: xpub,
+        derivation_path: DerivationPath::from(vec![zero]),
+        wildcard: Wildcard::Unhardened,
+    }))
+}
+
+/// Encode the BIP-341 provably-unspendable `H` point as a BIP-32 [`Xpub`] with
+/// the given `chain_code`. `H` is fixed, so `(network, chain_code)` fully
+/// determines the xpub; deriving it stays unspendable (children of an
+/// unknown-discrete-log point are unknown).
+fn nums_xpub(
+    bitcoin_net: bitcoin::Network,
+    chain_code: &[u8; 32],
+) -> Result<Xpub, DescriptorError> {
+    use bitcoin::hex::FromHex;
+    // H is the x-coordinate of an even-Y point (BIP-341 lift_x), so the
+    // compressed encoding is `02 || H_x`.
+    let hx = <[u8; 32]>::from_hex(NUMS_INTERNAL_KEY)
+        .map_err(|e| DescriptorError::KeyConversion(e.to_string()))?;
+    let mut sec = [0u8; 33];
+    sec[0] = 0x02;
+    sec[1..].copy_from_slice(&hx);
+    let public_key = bitcoin::secp256k1::PublicKey::from_slice(&sec)
+        .map_err(|e| DescriptorError::KeyConversion(e.to_string()))?;
+    let child_number = ChildNumber::from_normal_idx(0)
+        .map_err(|e| DescriptorError::KeyConversion(e.to_string()))?;
+    Ok(Xpub {
+        network: bitcoin::NetworkKind::from(bitcoin_net),
+        depth: 0,
+        parent_fingerprint: Fingerprint::default(),
+        child_number,
+        public_key,
+        chain_code: bitcoin::bip32::ChainCode::from(*chain_code),
+    })
 }
 
 /// Reject any pair of formatted keys that collide — distinct [`SignerId`]s with

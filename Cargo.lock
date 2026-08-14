@@ -533,6 +533,7 @@ dependencies = [
  "emvault-electrum",
  "emvault-esplora",
  "emvault-pkcs11",
+ "getrandom 0.3.4",
  "hex",
  "miniscript",
  "proptest",

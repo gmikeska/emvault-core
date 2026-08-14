@@ -41,6 +41,8 @@ bdk_wallet = "3.1.0"
 bdk_bitcoind_rpc = "0.22"
 bitcoincore-rpc = "0.19"
 bitcoin = "0.32.10"
+# System RNG for the taproot NUMS-xpub chain code (public, per-federation).
+getrandom = "0.3"
 hex = "0.4.3"
 miniscript = "12.3.7"
 serde = "1.0.228"

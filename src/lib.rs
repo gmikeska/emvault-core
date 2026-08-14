@@ -111,14 +111,19 @@ pub mod test_utils;
 #[cfg(any(test, feature = "test-utils"))]
 pub use test_utils::MockSigner;
 
-pub use descriptor::{DescriptorBuilder, ScriptType, available_script_types};
+pub use descriptor::{
+    Bip388TaprootPolicy, DescriptorBuilder, ScriptType, TaprootInternalKey, available_script_types,
+};
 pub use error::{
     DescriptorError, EmVaultError, FederatedWalletError, FederationError, MigrationError,
     PsbtError, RecoveryError, SignerError, SnapshotError,
 };
 pub use federated_wallet::{BtcFederatedWallet, FederatedWallet, FederationWallet};
 pub use federation::Federation;
-pub use federation_build::{BuiltFederation, build_federation, build_federation_with};
+pub use federation_build::{
+    BuiltFederation, NumsChaincode, build_federation, build_federation_taproot_with,
+    build_federation_with,
+};
 pub use migration::{
     AccountForAccountBatchedSweep, AccountForAccountSweep, AccountUtxoSet, FederationMigration,
     MigrationPlan, SweepAlgorithm, SweepOutput, SweepTransaction,
