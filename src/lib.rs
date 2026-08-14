@@ -121,8 +121,8 @@ pub use error::{
 pub use federated_wallet::{BtcFederatedWallet, FederatedWallet, FederationWallet};
 pub use federation::Federation;
 pub use federation_build::{
-    BuiltFederation, NumsChaincode, build_federation, build_federation_taproot_with,
-    build_federation_with,
+    BuiltFederation, NumsChaincode, bip388_taproot_policy, build_federation,
+    build_federation_taproot_with, build_federation_with,
 };
 pub use migration::{
     AccountForAccountBatchedSweep, AccountForAccountSweep, AccountUtxoSet, FederationMigration,

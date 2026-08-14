@@ -9,7 +9,9 @@
 //! Generic over the [`Signer`] implementation so any backend (consumer hardware
 //! wallets, HSMs, …) builds federations the same way.
 
-use crate::descriptor::{KeyMode, ScriptType, TaprootInternalKey, to_multipath_string};
+use crate::descriptor::{
+    Bip388TaprootPolicy, KeyMode, ScriptType, TaprootInternalKey, to_multipath_string,
+};
 use crate::error::{DescriptorError, EmVaultError, SnapshotError};
 use crate::signer::Signer;
 use crate::{DescriptorBuilder, Federation, FederationSnapshot, NetworkType};
@@ -158,6 +160,33 @@ pub fn build_federation_taproot_with<S: Signer>(
     ))
 }
 
+/// Build the BIP-388 taproot wallet policy (`{template, keys}`) for `signers` at
+/// `threshold`, using the **same** xpub-NUMS setup as
+/// [`build_federation_taproot_with`] — so the policy a consumer device (Ledger)
+/// registers matches the funded descriptor's scriptPubKeys exactly. `chaincode`
+/// is the federation's stored NUMS chain code.
+///
+/// This is the single source of truth for the Ledger taproot policy: callers
+/// pass the same signer set + chain code they built the federation with.
+///
+/// # Errors
+/// [`EmVaultError`] if descriptor/policy assembly rejects the inputs.
+pub fn bip388_taproot_policy<S: Signer>(
+    signers: &[S],
+    threshold: u32,
+    network: NetworkType,
+    chaincode: [u8; 32],
+) -> Result<Bip388TaprootPolicy, EmVaultError> {
+    let mut builder = DescriptorBuilder::new(threshold, network)
+        .key_mode(KeyMode::Ranged)
+        .script_type(ScriptType::Tr)
+        .taproot_internal_key(TaprootInternalKey::NumsXpub(chaincode));
+    for s in signers {
+        builder.add_signer(s)?;
+    }
+    builder.bip388_taproot_policy().map_err(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,6 +315,17 @@ mod tests {
             addr.to_string().starts_with("tb1p"),
             "want P2TR, got {addr}"
         );
+    }
+
+    #[test]
+    fn bip388_policy_free_fn_matches_builder() {
+        // The free `bip388_taproot_policy(...)` uses the same setup as the
+        // descriptor build, so the Ledger policy matches the funded addresses.
+        let net = NetworkType::Bitcoin(Network::Testnet);
+        let pol = bip388_taproot_policy(&roster(&[1, 2, 3]), 2, net, [5; 32]).unwrap();
+        assert_eq!(pol.template, "tr(@0/**,multi_a(2,@1/**,@2/**,@3/**))");
+        assert_eq!(pol.keys.len(), 4);
+        assert!(pol.keys[0].starts_with("tpub") && !pol.keys[0].contains('['));
     }
 
     #[test]
