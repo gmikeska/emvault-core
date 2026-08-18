@@ -21,7 +21,7 @@ re-exports the whole family behind feature gates.
 
 ```toml
 [dependencies]
-emvault-core = "0.7"
+emvault-core = "0.8"
 ```
 
 ## Design priorities
@@ -47,7 +47,7 @@ In order, this crate optimizes for:
 | [`network`](src/network.rs)  | `NetworkType` (Bitcoin; `Elements` behind the `elements` feature, `#[non_exhaustive]`) |
 | [`federation`](src/federation.rs) | `Federation<S>` + immutable mutation APIs     |
 | [`federation_build`](src/federation_build.rs) | `build_federation` — canonical descriptor + snapshot from a signer set |
-| [`descriptor`](src/descriptor.rs) | `wsh(sortedmulti(...))` builder              |
+| [`descriptor`](src/descriptor.rs) | `wsh(sortedmulti(...))` + `tr(NUMS, multi_a(...))` builder (SegWit v0 & Taproot script-path)              |
 | [`federated_wallet`](src/federated_wallet.rs) | `BtcFederatedWallet` — version-aware federated wallet |
 | [`psbt`](src/psbt.rs)        | `UnsignedPsbt` / `FinalizedPsbt`, `SigningCoordinator` |
 | [`chain_sync`](src/chain_sync.rs) | Bitcoin Core `Emitter` drive loop for chain sync (nodeless Esplora/Waterfalls alternative via the `esplora` feature → `emvault_core::esplora`); `SyncResult` carries the reorg-reconciliation signals (`evicted_txids`, `reorg_rebuilt`) — see [Reorg reconciliation](#reorg-reconciliation) |
@@ -90,12 +90,17 @@ println!("{}", template.to_printable());
 # Ok::<(), emvault_core::EmVaultError>(())
 ```
 
-## Roadmap: hybrid (Taproot MAST) federations
+## Taproot federations
 
-> **Planned, not yet implemented.** A `tr(NUMS, { … })` MAST builder encoding
-> distinct spending paths (HSM-unanimous, wallet-unanimous, mixed) with the
-> internal key pinned to the BIP-341 NUMS point is a roadmap item. Today the
-> crate ships `wsh(sortedmulti(...))` P2WSH federations only (see
+As of **0.8.0** the crate builds **`tr(NUMS, multi_a(m, …))`** script-path Taproot
+federations alongside the original `wsh(sortedmulti(...))` P2WSH ones — select via
+`ScriptType` on the descriptor builder / `Federation::with_config`. The internal
+key is the provably-unspendable BIP-341 NUMS point, so the `multi_a` multisig
+script is the sole spending path.
+
+> **Roadmap.** A richer Taproot **MAST** encoding *distinct* spending-path leaves
+> (HSM-unanimous, wallet-unanimous, mixed) remains a future item; today's Taproot
+> mode is the single-leaf `multi_a` script path (see
 > [`descriptor`](src/descriptor.rs)).
 
 ## Signing flow
