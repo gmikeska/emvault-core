@@ -1,0 +1,57 @@
+# =============================================================================
+# EmVault — CI (offline gate + coverage). Identical across every crate repo.
+#
+#   offline   — fmt + clippy (pedantic, -D warnings) + `cargo test --all-targets`.
+#               Default features only, so every node/HSM-gated suite early-skips.
+#               This is the gate that must stay green on every PR.
+#   coverage  — cargo-llvm-cov over the offline tests; uploads lcov. Floor is
+#               advisory (COVERAGE_FAIL_UNDER); ratchet upward over time.
+#
+# The heavier `live` tier (ci/docker-compose stack + gated integration tiers,
+# LIVE_FEATURES) lives in the canonical asterism/ci workflow and is added per
+# repo once the shared CI stack + cross-repo checkout token are configured.
+# =============================================================================
+name: test
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  COVERAGE_FAIL_UNDER: "0"   # advisory floor; ratchet upward over time
+  CARGO_TERM_COLOR: always
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: clippy (pedantic)
+        run: cargo clippy --all-targets -- -W clippy::pedantic -D warnings
+      - name: test (offline; gated tiers self-skip)
+        run: cargo test --all-targets
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: coverage (offline tests)
+        run: |
+          cargo llvm-cov --all-targets --lcov --output-path lcov.info --summary-only \
+            --fail-under-lines "${COVERAGE_FAIL_UNDER}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lcov-${{ github.job }}
+          path: lcov.info

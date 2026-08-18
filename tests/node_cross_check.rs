@@ -1,4 +1,4 @@
-//! Cross-validate EmVault's locally-derived descriptors and addresses
+//! Cross-validate `EmVault`'s locally-derived descriptors and addresses
 //! against a running Bitcoin Core node via JSON-RPC.
 //!
 //! Gated behind the `node-tests` feature. Tests skip with a printed message

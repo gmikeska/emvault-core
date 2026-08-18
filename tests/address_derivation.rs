@@ -1,4 +1,4 @@
-//! Address derivation tests for every descriptor shape EmVault produces.
+//! Address derivation tests for every descriptor shape `EmVault` produces.
 //!
 //! These tests are pure-local: they never touch a network or an HSM. They
 //! verify the chain of `Federation` -> `Descriptor` -> `Address` is sound and
