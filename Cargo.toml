@@ -31,10 +31,10 @@ electrum = ["dep:emvault-electrum"]
 [dependencies]
 # Optional: nodeless Esplora/Waterfalls backend, behind the `esplora` feature.
 # Published crate; see emvault-esplora/docs/design/integration-design.md.
-emvault-esplora = { version = "0.9.0", optional = true, path = "../../emvault-esplora" }
+emvault-esplora = { version = "0.9.0", optional = true }
 # Optional: descriptor-private Electrum backend, behind the `electrum` feature.
 # Published crate (mirrors the emvault-esplora arrangement).
-emvault-electrum = { version = "0.9.0", optional = true, path = "../../emvault-electrum" }
+emvault-electrum = { version = "0.9.0", optional = true }
 bdk_wallet = "3.1.0"
 # Bitcoin Core RPC chain-sync: the `Emitter` drive loop in `chain_sync` (E3b),
 # shared by both consuming apps. `bitcoincore-rpc` supplies the `RpcApi` bound.
@@ -61,8 +61,8 @@ proptest = "1.11.0"
 rand = "0.10.1"
 ureq = { version = "2.10", features = ["json"] }
 dotenvy = "0.15.7"
-emvault-pkcs11 = { version = "0.9.0", path = "../emvault-pkcs11" }
-emvault-dev-signer = { version = "0.9.0", path = "../emvault-dev-signer" }
+emvault-pkcs11 = { version = "0.9.0" }
+emvault-dev-signer = { version = "0.9.0" }
 serial_test = "3.5.0"
 # Runtime for the async electrum backend in the cross-backend reorg parity test
 # (`tests/reorg_cross_backend_live.rs`, gated behind the `electrum` feature + env).
