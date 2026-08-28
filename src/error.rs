@@ -255,6 +255,10 @@ pub enum RecoveryError {
     /// JSON serialization or deserialization failed.
     #[error("recovery JSON error: {0}")]
     Json(String),
+    /// A keyed authentication tag (HMAC) did not verify — wrong key, altered
+    /// content, or a forged tag.
+    #[error("recovery template authentication failed")]
+    AuthenticationFailed,
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +280,10 @@ pub enum SnapshotError {
     /// The snapshot's descriptor failed to parse.
     #[error("snapshot descriptor parse error: {0}")]
     Parse(String),
+    /// A keyed authentication tag (HMAC) did not verify — wrong key, altered
+    /// content, or a forged tag.
+    #[error("snapshot authentication failed")]
+    AuthenticationFailed,
 }
 
 // ---------------------------------------------------------------------------

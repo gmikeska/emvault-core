@@ -22,7 +22,11 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use bdk_wallet::{SignOptions, Wallet};
-use bitcoin::{Amount, FeeRate, Psbt, ScriptBuf, Transaction, Txid};
+use bitcoin::hashes::Hash;
+use bitcoin::secp256k1::{Message, Secp256k1};
+use bitcoin::sighash::{Prevouts, SighashCache};
+use bitcoin::taproot::TapLeafHash;
+use bitcoin::{Amount, FeeRate, Psbt, ScriptBuf, Transaction, Txid, XOnlyPublicKey};
 
 use crate::error::PsbtError;
 use crate::federation::Federation;
@@ -387,20 +391,33 @@ impl<'a, S: Signer> SigningCoordinator<'a, S> {
         let mut found_new = false;
         for (input_idx, input) in merged.inputs.iter().enumerate() {
             let prev_input = self.psbt.inputs.get(input_idx);
+            // P2WSH / ECDSA: a new `partial_sig` by a key whose bip32 origin is
+            // this signer.
             for pk in input.partial_sigs.keys() {
                 let inner: bitcoin::PublicKey = *pk;
-                // The signer "owns" this partial sig if its master fingerprint
-                // appears in either the BIP32 derivation map (P2WSH) or the
-                // taproot key origins (P2TR).
                 let fp_matches = input
                     .bip32_derivation
                     .iter()
-                    .any(|(k, (f, _))| *f == fp && k == &inner.inner)
-                    || input.tap_key_origins.iter().any(|(k, (_lh, (f, _)))| {
-                        *f == fp && *k == inner.inner.x_only_public_key().0
-                    });
-
+                    .any(|(k, (f, _))| *f == fp && k == &inner.inner);
                 if fp_matches && !prev_input.is_some_and(|p| p.partial_sigs.contains_key(pk)) {
+                    found_new = true;
+                }
+            }
+            // Taproot: a new, valid `tap_script_sig` keyed to an x-only key whose
+            // origin is this signer. Taproot signatures never live in
+            // `partial_sigs`, so without this branch every hardware Taproot
+            // signature was rejected at ingest.
+            for ((xonly, leaf_hash), sig) in &input.tap_script_sigs {
+                let fp_matches = input
+                    .tap_key_origins
+                    .get(xonly)
+                    .is_some_and(|(_leaves, (f, _))| *f == fp);
+                let is_new = !prev_input
+                    .is_some_and(|p| p.tap_script_sigs.contains_key(&(*xonly, *leaf_hash)));
+                if fp_matches
+                    && is_new
+                    && tap_script_sig_is_valid(&merged, input_idx, *xonly, *leaf_hash, sig)
+                {
                     found_new = true;
                 }
             }
@@ -463,7 +480,7 @@ fn signers_with_sigs<S: Signer>(psbt: &Psbt, federation: &Federation<S>) -> Hash
     for s in federation.signers() {
         fp_to_id.insert(s.fingerprint(), s.id());
     }
-    for input in &psbt.inputs {
+    for (idx, input) in psbt.inputs.iter().enumerate() {
         for (fp, _path) in input.bip32_derivation.values() {
             // partial_sigs holds bitcoin::PublicKey -> ecdsa::Signature; we
             // detect a contribution if a partial sig exists for any pk that
@@ -480,15 +497,67 @@ fn signers_with_sigs<S: Signer>(psbt: &Psbt, federation: &Federation<S>) -> Hash
                 }
             }
         }
-        for (_lh, (fp, _path)) in input.tap_key_origins.values() {
-            if let Some(id) = fp_to_id.get(fp)
-                && (!input.tap_script_sigs.is_empty() || input.tap_key_sig.is_some())
+        // ---- Taproot branch ----
+        // Bind each taproot script-path signature to the *specific* key that
+        // produced it, instead of the old "any sig anywhere → everyone counted"
+        // guard. tap_key_origins maps each x-only key (cosigners + internal key)
+        // to its origin; resolve those whose fingerprint is a federation signer,
+        // then count a signer only when a signature keyed to *their* x-only key
+        // is present AND verifies against the input sighash.
+        let mut xonly_to_id: HashMap<XOnlyPublicKey, SignerId> = HashMap::new();
+        for (xonly, (_leaves, (fp, _path))) in &input.tap_key_origins {
+            if let Some(id) = fp_to_id.get(fp) {
+                xonly_to_id.insert(*xonly, id.clone());
+            }
+        }
+        for ((xonly, leaf_hash), sig) in &input.tap_script_sigs {
+            if let Some(id) = xonly_to_id.get(xonly)
+                && tap_script_sig_is_valid(psbt, idx, *xonly, *leaf_hash, sig)
             {
                 out.insert(id.clone());
             }
         }
     }
     out
+}
+
+/// Verify a Taproot **script-path** signature against the input's sighash.
+///
+/// Returns `true` only when `sig` is a cryptographically valid Schnorr
+/// signature by `xonly` over the BIP-341 script-spend sighash for `input_idx`
+/// under `leaf_hash`. Used so that signature *counting* reflects valid
+/// signatures, not merely present ones — a host that plants a junk
+/// `tap_script_sig` cannot inflate the completion count.
+///
+/// Taproot sighashes commit to *all* spent outputs, so every input must carry a
+/// `witness_utxo`; if any is missing the sighash can't be computed and the
+/// signature is treated as unverifiable (`false`).
+fn tap_script_sig_is_valid(
+    psbt: &Psbt,
+    input_idx: usize,
+    xonly: XOnlyPublicKey,
+    leaf_hash: TapLeafHash,
+    sig: &bitcoin::taproot::Signature,
+) -> bool {
+    let mut prevouts = Vec::with_capacity(psbt.inputs.len());
+    for inp in &psbt.inputs {
+        match &inp.witness_utxo {
+            Some(txout) => prevouts.push(txout.clone()),
+            None => return false,
+        }
+    }
+    let mut cache = SighashCache::new(&psbt.unsigned_tx);
+    let Ok(sighash) = cache.taproot_script_spend_signature_hash(
+        input_idx,
+        &Prevouts::All(&prevouts),
+        leaf_hash,
+        sig.sighash_type,
+    ) else {
+        return false;
+    };
+    let msg = Message::from_digest(sighash.to_byte_array());
+    let secp = Secp256k1::verification_only();
+    secp.verify_schnorr(&sig.signature, &msg, &xonly).is_ok()
 }
 
 #[cfg(test)]
@@ -559,5 +628,220 @@ mod tests {
         )
         .expect_err("unfunded wallet cannot build a spend");
         assert!(matches!(err, PsbtError::BuildFailed(_)), "got {err:?}");
+    }
+
+    // ---- F1: Taproot signature accounting (counting + ingest + validity) ----
+    //
+    // These drive the coordinator's Taproot bookkeeping with *real* BIP-340
+    // signatures, without BDK or an HSM: a `MockSigner`'s key is fully
+    // reproducible (`Xpriv::new_master` over the seed, derived at the same
+    // path), so we can forge genuine `tap_script_sigs` attributable to real
+    // federation members and assert one-increment-per-real-signature.
+
+    use bitcoin::bip32::{DerivationPath, Xpriv};
+    use bitcoin::secp256k1::{Keypair, SecretKey};
+    use bitcoin::sighash::TapSighashType;
+    use bitcoin::{
+        Network, OutPoint, Sequence, TxIn, TxOut, Witness, absolute::LockTime, transaction::Version,
+    };
+
+    use crate::federation::Federation;
+    use crate::test_utils::MockSigner;
+
+    /// Reproduce a `MockSigner::with_seed(seed, Testnet)` signing key: the same
+    /// master seed, derivation path, secret key, x-only pubkey, and master
+    /// fingerprint the mock exposes to the federation.
+    fn keyed(
+        seed: u64,
+    ) -> (
+        SecretKey,
+        XOnlyPublicKey,
+        bitcoin::bip32::Fingerprint,
+        DerivationPath,
+    ) {
+        let secp = Secp256k1::new();
+        let mut seed_bytes = [0u8; 32];
+        for (i, b) in seed.to_be_bytes().iter().cycle().take(32).enumerate() {
+            seed_bytes[i] = *b;
+        }
+        let xpriv = Xpriv::new_master(Network::Testnet, &seed_bytes).unwrap();
+        let path: DerivationPath = "m/48'/1'/0'/2'".parse().unwrap();
+        let derived = xpriv.derive_priv(&secp, &path).unwrap();
+        let sk = derived.private_key;
+        let xonly = Keypair::from_secret_key(&secp, &sk).x_only_public_key().0;
+        (sk, xonly, xpriv.fingerprint(&secp), path)
+    }
+
+    fn synthetic_p2tr_prevout() -> TxOut {
+        let mut spk = vec![0x51, 0x20];
+        spk.extend([0xAB; 32]);
+        TxOut {
+            value: Amount::from_sat(100_000),
+            script_pubkey: ScriptBuf::from_bytes(spk),
+        }
+    }
+
+    /// A 1-input unsigned PSBT spending `prevout`, with `witness_utxo` set and a
+    /// `tap_key_origins` entry per cosigner pointing at `leaf`. No signatures.
+    fn base_taproot_psbt(
+        cosigners: &[(XOnlyPublicKey, bitcoin::bip32::Fingerprint, DerivationPath)],
+        leaf: TapLeafHash,
+        prevout: &TxOut,
+    ) -> Psbt {
+        let tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::new(Txid::from_byte_array([9u8; 32]), 0),
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                witness: Witness::new(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(90_000),
+                script_pubkey: prevout.script_pubkey.clone(),
+            }],
+        };
+        let mut psbt = Psbt::from_unsigned_tx(tx).unwrap();
+        psbt.inputs[0].witness_utxo = Some(prevout.clone());
+        for (xonly, fp, path) in cosigners {
+            psbt.inputs[0]
+                .tap_key_origins
+                .insert(*xonly, (vec![leaf], (*fp, path.clone())));
+        }
+        psbt
+    }
+
+    /// Clone `base` and add a genuine BIP-340 script-path signature by `sk` over
+    /// the real tapscript sighash for (`leaf`, `prevout`).
+    fn with_tap_sig(
+        base: &Psbt,
+        sk: &SecretKey,
+        xonly: XOnlyPublicKey,
+        leaf: TapLeafHash,
+        prevout: &TxOut,
+    ) -> Psbt {
+        let secp = Secp256k1::new();
+        let prevouts = [prevout.clone()];
+        let sighash = SighashCache::new(&base.unsigned_tx)
+            .taproot_script_spend_signature_hash(
+                0,
+                &Prevouts::All(&prevouts),
+                leaf,
+                TapSighashType::Default,
+            )
+            .unwrap();
+        let msg = Message::from_digest(sighash.to_byte_array());
+        let sig = secp.sign_schnorr_no_aux_rand(&msg, &Keypair::from_secret_key(&secp, sk));
+        let mut out = base.clone();
+        out.inputs[0].tap_script_sigs.insert(
+            (xonly, leaf),
+            bitcoin::taproot::Signature {
+                signature: sig,
+                sighash_type: TapSighashType::Default,
+            },
+        );
+        out
+    }
+
+    fn taproot_2_of_3() -> Federation<MockSigner> {
+        let signers: Vec<MockSigner> = [1u64, 2, 3]
+            .iter()
+            .map(|s| MockSigner::with_seed(*s, Network::Testnet))
+            .collect();
+        Federation::new(2, signers, Network::Testnet.into()).unwrap()
+    }
+
+    #[test]
+    fn taproot_single_valid_sig_counts_exactly_one_signer() {
+        // Defect 1: a single cosigner signature must credit *only that cosigner*,
+        // never every key in tap_key_origins.
+        let (sk1, x1, f1, p1) = keyed(1);
+        let (_, x2, f2, p2) = keyed(2);
+        let (_, x3, f3, p3) = keyed(3);
+        let prevout = synthetic_p2tr_prevout();
+        let leaf = TapLeafHash::from_byte_array([0x42; 32]);
+        let base = base_taproot_psbt(&[(x1, f1, p1), (x2, f2, p2), (x3, f3, p3)], leaf, &prevout);
+        let signed = with_tap_sig(&base, &sk1, x1, leaf, &prevout);
+
+        let fed = taproot_2_of_3();
+        let got = signers_with_sigs(&signed, &fed);
+        assert_eq!(got.len(), 1, "one sig must credit exactly one signer");
+        assert!(got.contains(&SignerId::from_fingerprint(f1)));
+    }
+
+    #[test]
+    fn taproot_ingest_accepts_valid_sigs_and_reaches_threshold_only_at_two() {
+        // Defect 2 (valid Taproot sigs accepted at ingest) + completion is not
+        // reported until the real threshold of distinct signers is met.
+        let (sk1, x1, f1, p1) = keyed(1);
+        let (sk2, x2, f2, p2) = keyed(2);
+        let (_, x3, f3, p3) = keyed(3);
+        let prevout = synthetic_p2tr_prevout();
+        let leaf = TapLeafHash::from_byte_array([0x42; 32]);
+        let base = base_taproot_psbt(&[(x1, f1, p1), (x2, f2, p2), (x3, f3, p3)], leaf, &prevout);
+
+        let fed = taproot_2_of_3();
+        let mut coord = SigningCoordinator::new(&fed, UnsignedPsbt::new(base.clone()).unwrap());
+
+        coord
+            .receive_signature(
+                &SignerId::from_fingerprint(f1),
+                with_tap_sig(&base, &sk1, x1, leaf, &prevout),
+            )
+            .expect("valid taproot sig #1 accepted");
+        assert_eq!(coord.signatures_collected(), 1);
+        assert!(!coord.is_complete(), "1-of-2 must not be complete");
+
+        coord
+            .receive_signature(
+                &SignerId::from_fingerprint(f2),
+                with_tap_sig(&base, &sk2, x2, leaf, &prevout),
+            )
+            .expect("valid taproot sig #2 accepted");
+        assert_eq!(coord.signatures_collected(), 2);
+        assert!(coord.is_complete(), "2-of-2 threshold met");
+    }
+
+    #[test]
+    fn taproot_ingest_rejects_present_but_invalid_sig() {
+        // The validity gate: a signature that is present and attributable but
+        // does not verify against the sighash must not be counted.
+        let (sk1, x1, f1, p1) = keyed(1);
+        let (_, x2, f2, p2) = keyed(2);
+        let (_, x3, f3, p3) = keyed(3);
+        let prevout = synthetic_p2tr_prevout();
+        let leaf = TapLeafHash::from_byte_array([0x42; 32]);
+        let base = base_taproot_psbt(&[(x1, f1, p1), (x2, f2, p2), (x3, f3, p3)], leaf, &prevout);
+
+        // A real signature by cosigner 1, but over the WRONG message → invalid
+        // for the claimed (x1, leaf) sighash.
+        let secp = Secp256k1::new();
+        let bogus = secp.sign_schnorr_no_aux_rand(
+            &Message::from_digest([0u8; 32]),
+            &Keypair::from_secret_key(&secp, &sk1),
+        );
+        let mut junk = base.clone();
+        junk.inputs[0].tap_script_sigs.insert(
+            (x1, leaf),
+            bitcoin::taproot::Signature {
+                signature: bogus,
+                sighash_type: TapSighashType::Default,
+            },
+        );
+
+        let fed = taproot_2_of_3();
+        // Counting path ignores it.
+        assert!(signers_with_sigs(&junk, &fed).is_empty());
+        // Ingest path rejects it outright.
+        let mut coord = SigningCoordinator::new(&fed, UnsignedPsbt::new(base).unwrap());
+        let err = coord
+            .receive_signature(&SignerId::from_fingerprint(f1), junk)
+            .expect_err("invalid taproot sig must be rejected");
+        assert!(
+            matches!(err, PsbtError::InvalidSignature(..)),
+            "got {err:?}"
+        );
+        assert_eq!(coord.signatures_collected(), 0);
     }
 }

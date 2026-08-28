@@ -9,7 +9,21 @@
 //! - Per-signer metadata (fingerprint, derivation path, device type).
 //! - Last-used receive/change indexes for efficient recovery scanning.
 //! - Programmatically-generated, per-software import instructions.
-//! - A SHA-256 content checksum for tamper detection.
+//! - A SHA-256 content **corruption** checksum (see below).
+//!
+//! ## The checksum detects corruption, not tampering
+//!
+//! The [`RecoveryTemplate::checksum`] is an **unkeyed** SHA-256 over the
+//! template's canonical content. It catches accidental corruption (a truncated
+//! file, a flipped byte, a bad copy-paste) — but it is **not** tamper-evidence:
+//! anyone who edits the descriptor can recompute the SHA-256 and overwrite the
+//! checksum. `EmVault` ships **no cryptographic authentication of federation
+//! configuration at rest**; integrity of "which keys, what threshold" rests on
+//! (a) trusted storage and (b) the operator confirming the first receive
+//! address on-device against a known reference, exactly as the reconstruction
+//! instructions direct. For keyed authentication, use
+//! [`RecoveryTemplate::authenticate`] / [`RecoveryTemplate::verify_authentic`]
+//! with an operator-held MAC key.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -108,7 +122,10 @@ pub struct RecoveryTemplate {
     pub last_receive_index: Option<u32>,
     /// Last-used change index (for recovery scanning hint).
     pub last_change_index: Option<u32>,
-    /// SHA-256 hex checksum over the canonical content of this template.
+    /// Unkeyed SHA-256 hex checksum over the canonical content of this template.
+    ///
+    /// Detects **corruption**, not tampering — see the module docs. For keyed
+    /// authentication use [`RecoveryTemplate::authenticate`].
     pub checksum: String,
     /// Generation timestamp (Unix seconds).
     #[serde_as(as = "TimestampSeconds<i64>")]
@@ -292,6 +309,42 @@ impl RecoveryTemplate {
         Ok(())
     }
 
+    /// Produce a keyed authentication tag (HMAC-SHA256, hex) over this
+    /// template's canonical content using an operator-held `mac_key`.
+    ///
+    /// Unlike [`RecoveryTemplate::checksum`], this is genuine tamper-evidence:
+    /// an attacker who edits the template cannot forge a matching tag without
+    /// `mac_key`. The tag covers the same canonical content the checksum does
+    /// (the checksum field itself is excluded), so it authenticates "which keys,
+    /// what threshold, what descriptor" — the load-bearing configuration.
+    ///
+    /// Store the tag alongside the template and the key separately (the point of
+    /// a MAC is that the key does not travel with the data it authenticates).
+    #[must_use]
+    pub fn authenticate(&self, mac_key: &[u8]) -> String {
+        hex::encode(hmac_sha256(mac_key, canonical_content(self).as_bytes()))
+    }
+
+    /// Verify a keyed authentication tag produced by
+    /// [`RecoveryTemplate::authenticate`] with the same `mac_key`.
+    ///
+    /// The comparison is constant-time. This is independent of
+    /// [`RecoveryTemplate::verify`]: `verify` only detects corruption, while
+    /// this detects deliberate tampering.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecoveryError::AuthenticationFailed`] if the recomputed tag
+    /// does not match `mac_hex` (wrong key, altered content, or a forged tag).
+    pub fn verify_authentic(&self, mac_key: &[u8], mac_hex: &str) -> Result<(), RecoveryError> {
+        let expected = self.authenticate(mac_key);
+        if constant_time_eq(expected.as_bytes(), mac_hex.as_bytes()) {
+            Ok(())
+        } else {
+            Err(RecoveryError::AuthenticationFailed)
+        }
+    }
+
     /// Render a human-readable text representation suitable for printing.
     pub fn to_printable(&self) -> String {
         let mut out = String::new();
@@ -449,9 +502,10 @@ fn nunchuk_instructions(t: &RecoveryTemplate) -> RecoveryInstructions {
 // Checksum
 // ---------------------------------------------------------------------------
 
-fn compute_checksum(t: &RecoveryTemplate) -> String {
-    // Canonicalize: serialize a content-only struct without the checksum
-    // field, with sorted keys, to a JSON string. SHA-256 of that string.
+/// The canonical, checksum-independent content bytes of a template — the exact
+/// bytes both the unkeyed checksum and the keyed MAC are computed over.
+fn canonical_content(t: &RecoveryTemplate) -> String {
+    // A content-only struct without the checksum field, with sorted keys.
     let content = ChecksumContent {
         descriptor: &t.descriptor,
         threshold: t.threshold,
@@ -462,10 +516,65 @@ fn compute_checksum(t: &RecoveryTemplate) -> String {
         last_receive_index: t.last_receive_index,
         last_change_index: t.last_change_index,
     };
-    let canonical = canonical_json(&content);
+    canonical_json(&content)
+}
+
+fn compute_checksum(t: &RecoveryTemplate) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(canonical.as_bytes());
+    hasher.update(canonical_content(t).as_bytes());
     hex::encode(hasher.finalize())
+}
+
+// ---------------------------------------------------------------------------
+// Keyed authentication (HMAC-SHA256) — shared by recovery + snapshot
+// ---------------------------------------------------------------------------
+
+/// HMAC-SHA256 (RFC 2104) over `msg` with `key`, dependency-free on top of the
+/// `sha2` hash this crate already uses. Used to turn the unkeyed
+/// corruption-checksum into a keyed *tamper*-detection tag: without `key`, an
+/// editor cannot forge a matching tag.
+pub(crate) fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
+    const BLOCK: usize = 64;
+    let mut k = [0u8; BLOCK];
+    if key.len() > BLOCK {
+        // Keys longer than the block are hashed down first (RFC 2104).
+        let digest = Sha256::digest(key);
+        k[..32].copy_from_slice(&digest);
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+    let mut ipad = [0x36u8; BLOCK];
+    let mut opad = [0x5cu8; BLOCK];
+    for i in 0..BLOCK {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
+    }
+    let inner = {
+        let mut h = Sha256::new();
+        h.update(ipad);
+        h.update(msg);
+        h.finalize()
+    };
+    let mut h = Sha256::new();
+    h.update(opad);
+    h.update(inner);
+    let out = h.finalize();
+    let mut tag = [0u8; 32];
+    tag.copy_from_slice(&out);
+    tag
+}
+
+/// Constant-time byte-slice equality (no early return on first mismatch), so a
+/// MAC comparison does not leak where a forged tag diverges.
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 #[derive(Serialize)]
@@ -562,11 +671,38 @@ mod tests {
     }
 
     #[test]
-    fn checksum_detects_tamper() {
+    fn checksum_detects_corruption() {
+        // The unkeyed checksum catches an *accidental* mutation. It is NOT
+        // tamper-evidence: an attacker would recompute the SHA-256 after editing
+        // (see `authenticate`/`verify_authentic` for keyed tamper detection).
         let mut t = RecoveryTemplate::from_federation(&fed());
-        t.threshold = 99; // tamper
+        t.threshold = 99; // simulated corruption
         let err = t.verify().unwrap_err();
         assert!(matches!(err, RecoveryError::ChecksumMismatch { .. }));
+    }
+
+    #[test]
+    fn keyed_authentication_detects_tamper() {
+        // Unlike the checksum, a keyed MAC survives the attacker's recompute:
+        // without the key they cannot forge a matching tag.
+        let key = b"operator-held-mac-key-32-bytes!!";
+        let t = RecoveryTemplate::from_federation(&fed());
+        let mac = t.authenticate(key);
+        t.verify_authentic(key, &mac).unwrap();
+
+        // Tamper + honest checksum recompute still fails authentication.
+        let mut forged = t.clone();
+        forged.threshold = 99;
+        forged.checksum = super::compute_checksum(&forged); // attacker fixes checksum
+        forged.verify().unwrap(); // corruption check passes — not tamper-evident
+        let err = forged.verify_authentic(key, &mac).unwrap_err();
+        assert!(matches!(err, RecoveryError::AuthenticationFailed));
+
+        // Wrong key fails too.
+        let err = t
+            .verify_authentic(b"the-wrong-operator-mac-key-32by!", &mac)
+            .unwrap_err();
+        assert!(matches!(err, RecoveryError::AuthenticationFailed));
     }
 
     #[test]

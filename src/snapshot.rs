@@ -112,19 +112,40 @@ impl FederationSnapshot {
         serde_json::from_str(json).map_err(|e| SnapshotError::Json(e.to_string()))
     }
 
-    /// Verify internal consistency:
+    /// Verify internal **consistency** (a corruption check, not authentication —
+    /// see the note below):
     ///
     /// - Threshold/signer-count bounds.
     /// - Signer count matches `signers.len()`.
-    /// - Descriptor parses successfully.
-    /// - Each signer's xpub appears in the descriptor (string-level check).
+    /// - Descriptor parses and is a supported multisig shape
+    ///   (`wsh(sortedmulti)` or `tr(NUMS, multi_a)`).
+    /// - The descriptor's threshold equals `self.threshold`.
+    /// - The descriptor binds exactly this signer set: it holds `total_signers`
+    ///   cosigner keys and **each signer's full xpub** appears among them.
+    ///
+    /// The last two close the old gap where verification only tested that each
+    /// 8-hex **fingerprint** was a *substring* of the descriptor — which any
+    /// origin `[fp/path]` satisfies even if the key after it differs, and which
+    /// never cross-checked the threshold. Binding on the full base58 xpub and
+    /// the parsed threshold rejects a swapped key or an altered `m`.
+    ///
+    /// ## This is not authentication
+    ///
+    /// A passing `verify()` means the snapshot is internally *consistent*, not
+    /// that it is *authentic*. `verify()` uses no secret, so an attacker who
+    /// rewrites both the descriptor and the signer set consistently still
+    /// passes. At-rest config authenticity rests on trusted storage plus the
+    /// on-device first-address confirmation — or, for cryptographic
+    /// tamper-detection, [`FederationSnapshot::authenticate`] /
+    /// [`FederationSnapshot::verify_authentic`] with an operator-held key.
     ///
     /// # Errors
     ///
     /// Returns [`SnapshotError::InvalidThreshold`] for threshold/count
     /// violations, [`SnapshotError::Parse`] if the descriptor doesn't parse,
-    /// or [`SnapshotError::DescriptorMismatch`] if any signer's fingerprint
-    /// is absent from the descriptor.
+    /// or [`SnapshotError::DescriptorMismatch`] if the descriptor is an
+    /// unsupported shape, its threshold disagrees, or any signer's xpub is
+    /// absent from it.
     ///
     /// # Panics
     ///
@@ -147,18 +168,82 @@ impl FederationSnapshot {
             )));
         }
         let secp = bitcoin::secp256k1::Secp256k1::new();
-        miniscript::Descriptor::<miniscript::DescriptorPublicKey>::parse_descriptor(
-            &secp,
-            &self.descriptor,
-        )
-        .map_err(|e| SnapshotError::Parse(e.to_string()))?;
+        let (descriptor, _) =
+            miniscript::Descriptor::<miniscript::DescriptorPublicKey>::parse_descriptor(
+                &secp,
+                &self.descriptor,
+            )
+            .map_err(|e| SnapshotError::Parse(e.to_string()))?;
 
+        // Normalize to the shape-aware (threshold, key-set) identity. An
+        // unsupported shape is a mismatch, not a silent pass.
+        let policy = crate::verify::multisig_policy(&descriptor)
+            .map_err(|_| SnapshotError::DescriptorMismatch)?;
+
+        // Threshold must agree with the declared threshold.
+        if policy.threshold != self.threshold as usize {
+            return Err(SnapshotError::DescriptorMismatch);
+        }
+        // The descriptor must carry exactly the declared number of cosigner keys.
+        if policy.keys.len() != self.signers.len() {
+            return Err(SnapshotError::DescriptorMismatch);
+        }
+        // Every signer must be bound in the descriptor by BOTH its origin
+        // fingerprint AND its key material, co-located in the same descriptor
+        // key — far stronger than the previous "fingerprint appears *somewhere*"
+        // substring test, which any origin satisfies regardless of the key.
+        //
+        // The key material is matched in whichever form the builder emitted:
+        // the full xpub (Ranged mode) or the compressed public key the xpub
+        // derives to (Fixed mode). A snapshot that reuses a real fingerprint
+        // over a swapped key no longer verifies.
         for s in &self.signers {
-            if !self.descriptor.contains(&s.fingerprint) {
+            let derived_pk_hex = s
+                .xpub
+                .parse::<bitcoin::bip32::Xpub>()
+                .ok()
+                .map(|xp| hex::encode(xp.public_key.serialize()));
+            let origin = format!("[{}", s.fingerprint);
+            let bound = policy.keys.iter().any(|k| {
+                let origin_ok = k.contains(&origin);
+                let key_ok =
+                    k.contains(&s.xpub) || derived_pk_hex.as_deref().is_some_and(|h| k.contains(h));
+                origin_ok && key_ok
+            });
+            if !bound {
                 return Err(SnapshotError::DescriptorMismatch);
             }
         }
         Ok(())
+    }
+
+    /// Produce a keyed authentication tag (HMAC-SHA256, hex) over this
+    /// snapshot's canonical JSON using an operator-held `mac_key`.
+    ///
+    /// Genuine tamper-evidence for at-rest config: unlike [`Self::verify`]
+    /// (which uses no secret and only detects corruption), a tag produced here
+    /// cannot be forged without `mac_key`. Store the key separately from the
+    /// snapshot it authenticates.
+    #[must_use]
+    pub fn authenticate(&self, mac_key: &[u8]) -> String {
+        let canonical = crate::recovery::canonical_json(self);
+        hex::encode(crate::recovery::hmac_sha256(mac_key, canonical.as_bytes()))
+    }
+
+    /// Verify a keyed authentication tag produced by [`Self::authenticate`] with
+    /// the same `mac_key`. Constant-time comparison.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError::AuthenticationFailed`] if the recomputed tag
+    /// does not match `mac_hex`.
+    pub fn verify_authentic(&self, mac_key: &[u8], mac_hex: &str) -> Result<(), SnapshotError> {
+        let expected = self.authenticate(mac_key);
+        if crate::recovery::constant_time_eq(expected.as_bytes(), mac_hex.as_bytes()) {
+            Ok(())
+        } else {
+            Err(SnapshotError::AuthenticationFailed)
+        }
     }
 }
 
@@ -312,6 +397,69 @@ mod tests {
         snap.signers.pop();
         let err = snap.verify().unwrap_err();
         assert!(matches!(err, SnapshotError::InvalidThreshold(_)));
+    }
+
+    #[test]
+    fn verify_rejects_swapped_signer_key() {
+        // F2b: a signer whose fingerprint stays but whose xpub is swapped for a
+        // key NOT in the descriptor must be rejected (the old fingerprint-
+        // substring check let this through).
+        let mut snap = FederationSnapshot::from_federation(&fed());
+        let intruder = MockSigner::with_seed(99, Network::Testnet);
+        snap.signers[0].xpub = intruder.xpub().to_string();
+        // fingerprint left untouched → still a substring of the descriptor.
+        let err = snap.verify().unwrap_err();
+        assert!(
+            matches!(err, SnapshotError::DescriptorMismatch),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_descriptor_threshold_disagreement() {
+        // A descriptor whose embedded threshold differs from the declared one
+        // is a mismatch, even with the right keys.
+        let snap_2of3 = FederationSnapshot::from_federation(&fed());
+        let mut snap = FederationSnapshot::from_federation(
+            &Federation::new(
+                1,
+                vec![
+                    Box::new(MockSigner::with_seed(1, Network::Testnet)) as Box<dyn Signer>,
+                    Box::new(MockSigner::with_seed(2, Network::Testnet)) as _,
+                    Box::new(MockSigner::with_seed(3, Network::Testnet)) as _,
+                ],
+                Network::Testnet.into(),
+            )
+            .unwrap(),
+        );
+        // Claim threshold 2 while the descriptor encodes sortedmulti(1,...).
+        snap.threshold = 2;
+        assert_ne!(snap.descriptor, snap_2of3.descriptor);
+        let err = snap.verify().unwrap_err();
+        assert!(
+            matches!(err, SnapshotError::DescriptorMismatch),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn snapshot_keyed_authentication_detects_tamper() {
+        let key = b"operator-held-snapshot-mac-key!!";
+        let snap = FederationSnapshot::from_federation(&fed());
+        let mac = snap.authenticate(key);
+        snap.verify_authentic(key, &mac).unwrap();
+
+        // A consistent swap (still passes verify) fails authentication.
+        let mut forged = snap.clone();
+        forged.threshold = 1;
+        let err = forged.verify_authentic(key, &mac).unwrap_err();
+        assert!(matches!(err, SnapshotError::AuthenticationFailed));
+
+        // Wrong key fails.
+        let err = snap
+            .verify_authentic(b"the-wrong-snapshot-mac-key-32by!", &mac)
+            .unwrap_err();
+        assert!(matches!(err, SnapshotError::AuthenticationFailed));
     }
 
     // -----------------------------------------------------------------------

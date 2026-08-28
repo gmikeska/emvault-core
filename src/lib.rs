@@ -138,8 +138,9 @@ pub use signer::{
 };
 pub use snapshot::{FederatedWalletSnapshot, FederationSnapshot, SignerSnapshot};
 pub use verify::{
-    ExpectedOutput, MultisigPolicy, descriptors_match, ensure_descriptor_string_matches,
-    ensure_descriptors_match, multisig_policy, verify_psbt_outputs,
+    ExpectedOutput, MultisigPolicy, PolicyShape, descriptors_match,
+    ensure_descriptor_string_matches, ensure_descriptors_match, ensure_taproot_internal_key_is,
+    multisig_policy, verify_psbt_outputs,
 };
 
 // ── Canonical chain-stack crates ────────────────────────────────────────────

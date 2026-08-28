@@ -30,7 +30,7 @@ use std::str::FromStr;
 
 use bitcoin::{Amount, Psbt, ScriptBuf};
 use miniscript::descriptor::WshInner;
-use miniscript::{Descriptor, DescriptorPublicKey};
+use miniscript::{Descriptor, DescriptorPublicKey, Terminal};
 
 use crate::error::{DescriptorError, PsbtError};
 
@@ -38,57 +38,161 @@ use crate::error::{DescriptorError, PsbtError};
 // Descriptor policy comparison (Anchor #1 core)
 // ---------------------------------------------------------------------------
 
-/// The normalized, order-independent identity of a
-/// `wsh(sortedmulti(m, …))` multisig policy.
+/// Which on-chain script shape a [`MultisigPolicy`] came from.
+///
+/// Part of the policy identity: a `wsh(sortedmulti)` and a `tr(NUMS, multi_a)`
+/// over the *same* keys and threshold are **different** policies (they derive
+/// different addresses), so a shape difference is a mismatch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PolicyShape {
+    /// `wsh(sortedmulti(m, …))` — Segwit v0.
+    Wsh,
+    /// `tr(internal, multi_a(m, …))` — Taproot (BIP-341/342).
+    Tr,
+}
+
+/// The normalized, order-independent identity of a supported multisig policy —
+/// either `wsh(sortedmulti(m, …))` (Segwit v0) or `tr(internal, multi_a(m, …))`
+/// (Taproot).
 ///
 /// Two descriptors are the *same policy* — they lock coins to the same set of
-/// spending conditions and therefore derive the same addresses — iff they have
-/// the same [`threshold`](MultisigPolicy::threshold) and the same
-/// [`keys`](MultisigPolicy::keys) set. Ordering of the cosigner keys and the
-/// descriptor's trailing `#checksum` are irrelevant to that identity, so this
-/// type ignores both: the keys live in a [`BTreeSet`] and the checksum never
-/// enters the comparison.
+/// spending conditions and therefore derive the same addresses — iff they agree
+/// on [`shape`](MultisigPolicy::shape), [`threshold`](MultisigPolicy::threshold),
+/// the [`keys`](MultisigPolicy::keys) set, **and** (Taproot only) the
+/// [`internal_key`](MultisigPolicy::internal_key). Ordering of the cosigner keys
+/// and the descriptor's trailing `#checksum` are irrelevant to that identity, so
+/// this type ignores both: the keys live in a [`BTreeSet`] and the checksum
+/// never enters the comparison.
 ///
 /// Each key is captured as its canonical [`DescriptorPublicKey`] string
 /// (`[fingerprint/derivation]key`), so the comparison binds not just the raw
 /// key material but its **origin fingerprint and derivation path** — a hostile
 /// host that reuses the real xpubs under a different origin/path (which would
 /// change the derived addresses) is still rejected.
+///
+/// For Taproot, the internal key is captured too: a hostile host that keeps the
+/// right `multi_a` script leaf but swaps in a *live* internal key it controls
+/// (an unguarded key-path spend) produces a different `internal_key` and is
+/// rejected. Callers building the trusted descriptor should additionally pin the
+/// internal key to the expected unspendable NUMS point (see
+/// [`ensure_taproot_internal_key_is`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MultisigPolicy {
+    /// The script shape this policy locks to.
+    pub shape: PolicyShape,
     /// The `m` of an m-of-n policy.
     pub threshold: usize,
     /// The cosigner keys, each as its canonical `DescriptorPublicKey` string,
     /// held order-independently.
     pub keys: BTreeSet<String>,
+    /// The Taproot internal key as its canonical `DescriptorPublicKey` string,
+    /// or `None` for `wsh(sortedmulti)`.
+    pub internal_key: Option<String>,
 }
 
-/// Extract the normalized [`MultisigPolicy`] from a `wsh(sortedmulti(m, …))`
-/// descriptor.
+/// Extract the normalized [`MultisigPolicy`] from a `wsh(sortedmulti(m, …))` or
+/// `tr(internal, multi_a(m, …))` descriptor.
+///
+/// These are the two shapes [`crate::DescriptorBuilder`] emits. Any other shape
+/// means the descriptor did not come from where we think it did and must not be
+/// trusted.
 ///
 /// # Errors
 ///
-/// Returns [`DescriptorError::UnsupportedShape`] if `desc` is not a
-/// `wsh(sortedmulti(...))` — every federation descriptor this crate builds is
-/// (see [`crate::DescriptorBuilder`]), so any other shape means the descriptor
-/// did not come from where we think it did and must not be trusted.
+/// Returns [`DescriptorError::UnsupportedShape`] if `desc` is neither
+/// `wsh(sortedmulti(...))` nor `tr(internal, multi_a(...))` — including a
+/// Taproot descriptor whose tree is empty (key-path only), has more than one
+/// leaf, or whose single leaf is not a bare `multi_a`.
 pub fn multisig_policy(
     desc: &Descriptor<DescriptorPublicKey>,
 ) -> Result<MultisigPolicy, DescriptorError> {
     match desc {
         Descriptor::Wsh(wsh) => match wsh.as_inner() {
             WshInner::SortedMulti(smv) => Ok(MultisigPolicy {
+                shape: PolicyShape::Wsh,
                 threshold: smv.k(),
                 keys: smv.pks().iter().map(ToString::to_string).collect(),
+                internal_key: None,
             }),
             WshInner::Ms(_) => Err(DescriptorError::UnsupportedShape(
                 "wsh() body is raw miniscript, expected sortedmulti(...)".into(),
             )),
         },
+        Descriptor::Tr(tr) => taproot_multi_a_policy(tr),
         other => Err(DescriptorError::UnsupportedShape(format!(
-            "expected wsh(sortedmulti(...)), got a {} descriptor",
+            "expected wsh(sortedmulti(...)) or tr(NUMS, multi_a(...)), got a {} descriptor",
             descriptor_kind(other)
         ))),
+    }
+}
+
+/// Normalize a `tr(internal, multi_a(m, …))` descriptor into a
+/// [`MultisigPolicy`].
+///
+/// Requires the taptree to be exactly one leaf holding a bare `multi_a`. Any
+/// other tree shape (empty/key-path-only, multiple leaves, or a leaf that is not
+/// a bare `multi_a`) is [`DescriptorError::UnsupportedShape`] — we normalize only
+/// the shape this crate builds, never a best-effort guess at an unknown tree.
+fn taproot_multi_a_policy(
+    tr: &miniscript::descriptor::Tr<DescriptorPublicKey>,
+) -> Result<MultisigPolicy, DescriptorError> {
+    // Exactly one script leaf, at any depth (our builder emits a single leaf).
+    let mut leaves = tr.iter_scripts();
+    let (_, ms) = leaves.next().ok_or_else(|| {
+        DescriptorError::UnsupportedShape(
+            "tr() has no script leaf (key-path only), expected a single multi_a(...) leaf".into(),
+        )
+    })?;
+    if leaves.next().is_some() {
+        return Err(DescriptorError::UnsupportedShape(
+            "tr() has more than one script leaf, expected a single multi_a(...) leaf".into(),
+        ));
+    }
+    match ms.as_inner() {
+        Terminal::MultiA(thresh) => Ok(MultisigPolicy {
+            shape: PolicyShape::Tr,
+            threshold: thresh.k(),
+            keys: thresh.data().iter().map(ToString::to_string).collect(),
+            internal_key: Some(tr.internal_key().to_string()),
+        }),
+        _ => Err(DescriptorError::UnsupportedShape(
+            "tr() script leaf is not a bare multi_a(...)".into(),
+        )),
+    }
+}
+
+/// Assert that a Taproot descriptor's internal key equals `expected` — the
+/// federation's known unspendable NUMS point.
+///
+/// Anchor #1's descriptor-equality already rejects a swapped internal key
+/// *relative to the trusted descriptor*. This is the stronger, absolute check:
+/// even when comparing two attacker-influenced descriptors, it refuses any
+/// Taproot policy whose internal key is not the expected NUMS, closing an
+/// unguarded key-path spend. `expected` is the canonical `DescriptorPublicKey`
+/// string of the NUMS internal key (raw-`H` or NUMS-xpub, per the builder).
+///
+/// # Errors
+///
+/// - [`DescriptorError::UnsupportedShape`] if `desc` is not a supported Taproot
+///   `multi_a` policy (a `wsh` descriptor has no internal key to pin).
+/// - [`DescriptorError::PolicyMismatch`] if the internal key differs from
+///   `expected`.
+pub fn ensure_taproot_internal_key_is(
+    desc: &Descriptor<DescriptorPublicKey>,
+    expected: &str,
+) -> Result<(), DescriptorError> {
+    let policy = multisig_policy(desc)?;
+    let Some(internal) = policy.internal_key.as_deref() else {
+        return Err(DescriptorError::UnsupportedShape(
+            "descriptor is not Taproot; no internal key to pin".into(),
+        ));
+    };
+    if internal == expected {
+        Ok(())
+    } else {
+        Err(DescriptorError::PolicyMismatch(format!(
+            "taproot internal key {internal} != expected NUMS {expected}"
+        )))
     }
 }
 
@@ -136,8 +240,17 @@ pub fn ensure_descriptors_match(
     }
 
     let mut reasons = Vec::new();
+    if want.shape != got.shape {
+        reasons.push(format!("shape {:?} != {:?}", want.shape, got.shape));
+    }
     if want.threshold != got.threshold {
         reasons.push(format!("threshold {} != {}", want.threshold, got.threshold));
+    }
+    if want.internal_key != got.internal_key {
+        reasons.push(format!(
+            "taproot internal key {:?} != {:?}",
+            want.internal_key, got.internal_key
+        ));
     }
     let extra: Vec<&String> = got.keys.difference(&want.keys).collect();
     let missing: Vec<&String> = want.keys.difference(&got.keys).collect();
@@ -393,6 +506,105 @@ mod tests {
         let err = multisig_policy(&desc).unwrap_err();
         assert!(matches!(err, DescriptorError::UnsupportedShape(_)));
         assert!(err.to_string().contains("wpkh"), "got {err}");
+    }
+
+    // ---- Taproot (tr(NUMS, multi_a)) policy coverage — F4 / Phase 0+2 ----
+
+    fn tr_desc_from(
+        seeds: &[u64],
+        threshold: u32,
+        nums: crate::descriptor::TaprootInternalKey,
+    ) -> Descriptor<DescriptorPublicKey> {
+        use crate::descriptor::ScriptType;
+        let signers: Vec<MockSigner> = seeds
+            .iter()
+            .map(|s| MockSigner::with_seed(*s, Network::Testnet))
+            .collect();
+        let mut b = DescriptorBuilder::new(threshold, NetworkType::Bitcoin(Network::Testnet))
+            .key_mode(KeyMode::Ranged)
+            .script_type(ScriptType::Tr)
+            .taproot_internal_key(nums);
+        for s in &signers {
+            b.add_signer(s).unwrap();
+        }
+        b.build().unwrap()
+    }
+
+    #[test]
+    fn taproot_policy_extractable_and_shape_is_tr() {
+        use crate::descriptor::TaprootInternalKey;
+        let d = tr_desc_from(&[1, 2, 3], 2, TaprootInternalKey::NumsXpub([3; 32]));
+        assert!(d.to_string().starts_with("tr("), "got {d}");
+        let pol = multisig_policy(&d).unwrap();
+        assert_eq!(pol.shape, PolicyShape::Tr);
+        assert_eq!(pol.threshold, 2);
+        assert_eq!(pol.keys.len(), 3);
+        assert!(
+            pol.internal_key.is_some(),
+            "taproot policy carries internal key"
+        );
+    }
+
+    #[test]
+    fn taproot_identical_rosters_match_regardless_of_order() {
+        use crate::descriptor::TaprootInternalKey;
+        let a = tr_desc_from(&[1, 2, 3], 2, TaprootInternalKey::NumsXpub([3; 32]));
+        let b = tr_desc_from(&[3, 1, 2], 2, TaprootInternalKey::NumsXpub([3; 32]));
+        ensure_descriptors_match(&a, &b).unwrap();
+    }
+
+    #[test]
+    fn taproot_swapped_cosigner_is_rejected() {
+        use crate::descriptor::TaprootInternalKey;
+        let expected = tr_desc_from(&[1, 2, 3], 2, TaprootInternalKey::NumsXpub([3; 32]));
+        let hostile = tr_desc_from(&[1, 2, 99], 2, TaprootInternalKey::NumsXpub([3; 32]));
+        let err = ensure_descriptors_match(&expected, &hostile).unwrap_err();
+        assert!(matches!(err, DescriptorError::PolicyMismatch(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("unexpected key"), "got {msg}");
+        assert!(msg.contains("missing expected key"), "got {msg}");
+    }
+
+    #[test]
+    fn taproot_swapped_internal_key_is_rejected() {
+        use crate::descriptor::TaprootInternalKey;
+        // Same cosigners + threshold, different NUMS internal key → a live
+        // key-path an attacker could control. Must be a PolicyMismatch.
+        let expected = tr_desc_from(&[1, 2, 3], 2, TaprootInternalKey::NumsXpub([3; 32]));
+        let hostile = tr_desc_from(&[1, 2, 3], 2, TaprootInternalKey::NumsXpub([9; 32]));
+        assert!(!descriptors_match(&expected, &hostile).unwrap());
+        let err = ensure_descriptors_match(&expected, &hostile).unwrap_err();
+        assert!(matches!(err, DescriptorError::PolicyMismatch(_)));
+        assert!(
+            err.to_string().contains("internal key"),
+            "reason names the internal key: {err}"
+        );
+    }
+
+    #[test]
+    fn mixed_shape_wsh_vs_tr_is_rejected_not_panic() {
+        use crate::descriptor::TaprootInternalKey;
+        let wsh = desc_from(&[1, 2, 3], 2);
+        let tr = tr_desc_from(&[1, 2, 3], 2, TaprootInternalKey::NumsXpub([3; 32]));
+        let err = ensure_descriptors_match(&wsh, &tr).unwrap_err();
+        assert!(matches!(err, DescriptorError::PolicyMismatch(_)));
+        assert!(err.to_string().contains("shape"), "got {err}");
+    }
+
+    #[test]
+    fn taproot_internal_key_pin_accepts_expected_rejects_other() {
+        use crate::descriptor::TaprootInternalKey;
+        let d = tr_desc_from(&[1, 2, 3], 2, TaprootInternalKey::NumsXpub([3; 32]));
+        let expected = multisig_policy(&d).unwrap().internal_key.unwrap();
+        // The descriptor's own internal key pins fine.
+        ensure_taproot_internal_key_is(&d, &expected).unwrap();
+        // A different string is refused.
+        let err = ensure_taproot_internal_key_is(&d, "tpubDIFFERENT").unwrap_err();
+        assert!(matches!(err, DescriptorError::PolicyMismatch(_)));
+        // A wsh descriptor has no internal key to pin.
+        let wsh = desc_from(&[1, 2, 3], 2);
+        let err = ensure_taproot_internal_key_is(&wsh, &expected).unwrap_err();
+        assert!(matches!(err, DescriptorError::UnsupportedShape(_)));
     }
 
     // ---- PSBT output verification ----
