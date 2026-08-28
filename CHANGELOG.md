@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > Entries for 0.5.0 and earlier were reconstructed from git history.
 
+## [0.10.0] - 2026-08-28
+
+Security-audit hardening of the Taproot signing/verification path and federation
+config-at-rest (Rosie, EmVault v0.9.0 audit — F1/F4/F2). **Breaking:** the public
+`MultisigPolicy` gains `shape` and `internal_key` fields (Phase 0 normalizer).
+
+### Fixed
+- **F1 — Taproot signature accounting is now sound** (`psbt.rs`,
+  `SigningCoordinator`). Two defects fixed: `signers_with_sigs` no longer credits
+  *every* cosigner in `tap_key_origins` off a single `tap_script_sig` — each
+  signature is bound to the specific x-only key that produced it; and
+  `receive_signature` now detects Taproot `tap_script_sigs` at ingest (it
+  previously scanned only ECDSA `partial_sigs`, rejecting every hardware Taproot
+  signature). Attributed signatures are additionally **Schnorr-verified against
+  the BIP-341 script-spend sighash before counting**, so `is_complete()` /
+  `signatures_collected()` reflect cryptographically valid signatures, not merely
+  present ones. The production P2WSH path is unchanged.
+
+### Added
+- **F4 — Anchor #1 covers Taproot.** `multisig_policy` normalizes both
+  `wsh(sortedmulti)` and `tr(NUMS, multi_a)` into a shape-aware
+  `(shape, threshold, key-set, internal-key)` identity, so `ensure_descriptors_match`
+  rejects a swapped cosigner **or** a swapped Taproot internal key on a Taproot
+  federation. New `ensure_taproot_internal_key_is` pins the internal key to the
+  expected unspendable NUMS point.
+- **F2 — keyed authentication for config at rest.** `RecoveryTemplate` and
+  `FederationSnapshot` gain `authenticate` / `verify_authentic` (HMAC-SHA256 over
+  the canonical content, constant-time compare, dependency-free). The unkeyed
+  checksum is re-documented as a **corruption** check, not tamper-evidence.
+
+### Changed
+- **Breaking:** `MultisigPolicy` now carries `shape: PolicyShape` and
+  `internal_key: Option<String>` (both part of the equality that drives Anchor #1).
+- **F2 — snapshot binding fix.** `FederationSnapshot::verify()` binds each signer
+  by its origin fingerprint **and** key material (full xpub in Ranged mode, or the
+  derived compressed public key in Fixed mode) plus the parsed threshold and shape
+  — replacing the previous 8-hex fingerprint *substring* test that any origin
+  satisfied. Corrects the xpub-vs-fingerprint doc/code mismatch.
+
 ## [0.9.0] - 2026-08-21
 
 ### Changed
