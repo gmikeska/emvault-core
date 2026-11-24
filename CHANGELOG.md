@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > Entries for 0.5.0 and earlier were reconstructed from git history.
 
+## [0.12.0] - 2026-11-24
+
+Supersedes **0.11.0, which is yanked**. The source is identical to 0.11.0; the version moves so
+every inter-crate requirement in the suite resolves at one *resolvable* version (see
+`emvault-pkcs11` 0.12.0 for this round's change).
+
 ## [0.11.0] - 2026-11-24
 
 Released in lockstep with the suite. No functional change in this crate; the version
