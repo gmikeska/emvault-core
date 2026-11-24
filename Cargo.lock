@@ -522,7 +522,7 @@ dependencies = [
 
 [[package]]
 name = "emvault-core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "bdk_bitcoind_rpc",
  "bdk_wallet",
@@ -550,36 +550,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "emvault-core"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea5186715322097a201a14ffa5dbb06b04fb4350b896d760f3db60554c2a92f4"
-dependencies = [
- "bdk_bitcoind_rpc",
- "bdk_wallet",
- "bitcoin",
- "bitcoincore-rpc",
- "getrandom 0.3.4",
- "hex",
- "miniscript",
- "serde",
- "serde_json",
- "serde_with",
- "sha2",
- "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
 name = "emvault-dev-signer"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29f7d810f3e459ee309619315dba4f857137c7b318670aef4f19dd39afda32b6"
+version = "0.11.0"
 dependencies = [
  "bitcoin",
  "cryptoki",
  "dotenvy",
- "emvault-core 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "emvault-core",
  "emvault-pkcs11",
  "hex",
  "log",
@@ -590,9 +567,7 @@ dependencies = [
 
 [[package]]
 name = "emvault-electrum"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d382fc6a1376b8588ff5f81c29487a908c69798b0e86f9b93ce6f1b5338a337"
+version = "0.11.0"
 dependencies = [
  "bdk_electrum",
  "bdk_wallet",
@@ -604,9 +579,7 @@ dependencies = [
 
 [[package]]
 name = "emvault-esplora"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3295c7086ec2859ab93f5b5d141f2fe7ae4aeca2c2c3c9938144b50a85fc0c7"
+version = "0.11.0"
 dependencies = [
  "bdk_wallet",
  "bitcoin",
@@ -617,14 +590,12 @@ dependencies = [
 
 [[package]]
 name = "emvault-pkcs11"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02841a84e89852cd74303e39ad5a8f670df1e42926b6353fbe9965c04bd26f32"
+version = "0.11.0"
 dependencies = [
  "bdk_wallet",
  "bitcoin",
  "cryptoki",
- "emvault-core 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "emvault-core",
  "hex",
  "miniscript",
  "secrecy",

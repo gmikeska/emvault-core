@@ -21,7 +21,7 @@ re-exports the whole family behind feature gates.
 
 ```toml
 [dependencies]
-emvault-core = "0.10"
+emvault-core = "0.11"
 ```
 
 ## Design priorities
